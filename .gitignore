@@ -2,3 +2,9 @@ node_modules/
 dist/
 *.tgz
 release/
+.env
+.env.*
+*.key
+key
+.oswiki-sign/
+CLAUDE.md
