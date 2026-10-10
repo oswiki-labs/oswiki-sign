@@ -29,7 +29,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - name: Trusted publishing needs npm >= 11.5.1
+      - name: Staged publishing needs npm >= 11.15.0
         run: npm install -g npm@11.20.0
       - name: Tag matches package.json and is on main
         run: |
@@ -49,4 +49,17 @@ jobs:
       - run: npm run build
       - run: npm run check:pack
       - run: npm run test:bundle
-      - run: npm publish --provenance --access public --ignore-scripts
+      - name: Stage the release on npm
+        run: npm stage publish --provenance --access public --ignore-scripts
+      - name: Ask the maintainer to approve
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          {
+            echo "## $NAME@$VERSION is staged, not live yet"
+            echo
+            echo "A maintainer must approve it with 2FA before it is published:"
+            echo
+            echo "- On https://www.npmjs.com, open the **Staged Packages** tab, review $NAME@$VERSION and click **Approve**, or"
+            echo "- \`npm stage list $NAME\` to find the stage id, then \`npm stage approve <stage-id>\`."
+          } >> "$GITHUB_STEP_SUMMARY"

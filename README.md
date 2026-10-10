@@ -221,8 +221,9 @@ npm run test:bundle  # runs the bundle without node_modules
 
 1. Bump `version` in `package.json` and `package-lock.json` (`npm version <x.y.z> --no-git-tag-version`), merge to `main`.
 2. Tag that commit on `main` and push the tag: `git tag v<x.y.z> && git push origin v<x.y.z>`.
-3. The release workflow checks that the tag equals `v` + the `package.json` version and that the commit is on `main`, runs all checks, then publishes to npm with provenance through npm trusted publishing (no npm token is stored anywhere).
-4. Update the pinned version in the install snippets and on the OSWiki developer docs.
+3. The release workflow checks that the tag equals `v` + the `package.json` version and that the commit is on `main`, runs all checks, then stages the version on npm with provenance (`npm stage publish`) through npm trusted publishing (no npm token is stored anywhere). The trusted publisher only allows staging, so nothing goes live from CI alone.
+4. A maintainer approves the staged version with 2FA, in the **Staged Packages** tab on [npmjs.com](https://www.npmjs.com) or with `npm stage approve <stage-id>`. Only then is it live. The job summary links the steps. A reviewer on the GitHub `npm` environment is optional, as an extra gate before the workflow runs.
+5. Update the pinned version in the install snippets and on the OSWiki developer docs.
 
 ## License
 
