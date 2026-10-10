@@ -371,7 +371,8 @@ async function limitsStep(io: Prompter): Promise<Limits> {
   io.print('oswiki-sign refuses anything above these limits, whatever the AI says. "skip" turns buys and offers off on that chain (listing and cancelling still work).');
   const maxBuyEth = await askAmount(io, 'Most one buy or offer may spend on Ethereum, in ETH', '0.05');
   const maxBuyApe = await askAmount(io, 'Most one buy or offer may spend on ApeChain, in APE', '50');
-  const minListFloorPct = await askInt(io, 'Refuse listings and accepted offers below this % of the floor', '50', 100);
+  io.print('Floor guard: a typo like 0.05 instead of 0.5 is refused instead of selling far under the market. 0 turns it off.');
+  const minListFloorPct = await askInt(io, 'Refuse listings and accepted offers below this % of the floor (0 = off)', '50', 100);
   const maxTradesPerDay = await askInt(io, 'Most trades per day', '50', 100000);
   io.print('Dry run: previews work, but nothing is signed or sent. Start with it on and turn it off once the previews look right.');
   const dryRun = await askYesNo(io, 'Turn dry run on?', true);
