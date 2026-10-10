@@ -17,6 +17,8 @@ import { hashOrderComponents } from '../src/seaport/sign.js';
 import { buildListingOrder, serializeOrderComponents } from '../src/seaport/order.js';
 import { loadWallet } from '../src/secret.js';
 import { chargeOf, createSignServer, createToolHandler, elicitationConfirmer, NO_HUMAN_CONFIRMER, type HumanConfirmer } from '../src/server.js';
+import { SettingsStore } from '../src/settings.js';
+import { VERSION } from '../src/version.js';
 import { LOCK_STALE_MS, StateLockError, TradeState, type PendingTx } from '../src/state.js';
 import vectors from './fixtures/seaport-vectors.json' with { type: 'json' };
 import { cancelLogs, COLLECTION, confirmIdOf, ETH, fulfilledLog, harness, MAINNET_FEE_RECIPIENT, makeTransport, newChainState, OTHER_SELLER, TEST_ADDRESS, TEST_KEY, type Harness } from './helpers.js';
@@ -84,6 +86,66 @@ describe('human confirmation (H2)', () => {
     const result = await h.call('execute', { confirmId: confirmIdOf(text) });
     expect(result.isError).toBe(false);
     expect(h.chain.sent).toHaveLength(1);
+  });
+
+  it('with OSWIKI_CONFIRM_MODE=off runs without the dialog, lets the AI decide and says so in every preview', async () => {
+    const h = harness({ env: { OSWIKI_CONFIRM_MODE: 'off' }, logsFor: () => [fulfilledLog(vectorHash, OTHER_SELLER)] });
+    const dialog = recorder('declined');
+    h.handler.confirmer = dialog;
+    setupBuy(h);
+    const text = await previewBuy(h);
+    expect(text).toContain('CONFIRMATION OFF (OSWIKI_CONFIRM_MODE=off)');
+    expect(text).toContain('Confirmation is off: you may execute when the user asked for this trade or gave a standing instruction that covers it; stay within the limits; report every executed trade to the user.');
+    expect(text).not.toMatch(/ask the user|ask them to confirm/i);
+    const status = (await h.call('wallet_status')).text;
+    expect(status).toContain('Confirmation: OFF - trades run on the AI\'s word; a manipulated text could trigger a trade within your limits');
+    expect(status).toContain('OSWIKI_CONFIRM_MODE=off');
+    const result = await h.call('execute', { confirmId: confirmIdOf(text) });
+    expect(result.isError).toBe(false);
+    expect(dialog.asked).toHaveLength(0);
+    expect(h.chain.sent).toHaveLength(1);
+  });
+
+  it('keeps every configured limit in off mode', async () => {
+    const h = harness({ env: { OSWIKI_CONFIRM_MODE: 'off', OSWIKI_MAX_BUY_ETH: '0.5' } });
+    h.handler.confirmer = NO_HUMAN_CONFIRMER;
+    setupBuy(h);
+    const preview = await h.call('preview_buy', { chainId: 1, askIds: [vectorAskId] });
+    expect(preview.isError).toBe(true);
+    expect(h.chain.sent).toHaveLength(0);
+  });
+
+  it('off mode over a real MCP connection: no elicitation, no requiresUserInteraction, off instructions', async () => {
+    const h = harness({ env: { OSWIKI_CONFIRM_MODE: 'off' }, logsFor: () => [fulfilledLog(vectorHash, OTHER_SELLER)] });
+    setupBuy(h);
+    const server = createSignServer(h.handler);
+    const client = new Client({ name: 'test', version: '1.0.0' }, { capabilities: { elicitation: { form: {} } } });
+    let elicited = 0;
+    client.setRequestHandler(ElicitRequestSchema, async () => {
+      elicited++;
+      return { action: 'decline' };
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    expect(client.getInstructions()).toContain('Confirmation is off: you may execute');
+    const { tools } = await client.listTools();
+    expect(tools.find(tool => tool.name === 'execute')).not.toHaveProperty('_meta');
+    const preview = await client.callTool({ name: 'preview_buy', arguments: { chainId: 1, askIds: [vectorAskId] } }) as { content: Array<{ text: string }> };
+    const result = await client.callTool({ name: 'execute', arguments: { confirmId: confirmIdOf(preview.content[0]!.text) } }) as { isError?: boolean };
+    expect(result.isError === true).toBe(false);
+    expect(elicited).toBe(0);
+    expect(h.chain.sent).toHaveLength(1);
+    await client.close();
+  });
+
+  it('wallet_status lists the exact settings and how to change them', async () => {
+    const h = harness({ env: { OSWIKI_DRY_RUN: '1', OSWIKI_MAX_BUY_ETH: '0.05', OSWIKI_MAX_BUY_APE: '' } });
+    const status = (await h.call('wallet_status')).text;
+    for (const line of ['- OSWIKI_DRY_RUN=1', '- OSWIKI_CONFIRM_MODE=human', '- OSWIKI_MAX_BUY_ETH=0.05', '- OSWIKI_MAX_BUY_APE=not set (buys and offers off on ApeChain)', '- OSWIKI_DAILY_MAX_ETH=0.15', '- OSWIKI_MIN_LIST_FLOOR_PCT=50', '- OSWIKI_MAX_TRADES_PER_DAY=50', '- OSWIKI_MAX_GWEI=200', '- OSWIKI_ALLOWED_COLLECTIONS=not set (any collection)']) {
+      expect(status).toContain(line);
+    }
+    expect(status).not.toContain('Confirmation: OFF');
+    expect(status.trimEnd().split('\n').at(-2)).toBe(`To change limits or confirmation: run \`npx -y @oswikixyz/sign@${VERSION} setup\` again in your own terminal (keep the wallet), then restart the AI client.`);
   });
 
   it('shows the full preview in the dialog and sends nothing when the user declines', async () => {
@@ -180,6 +242,106 @@ describe('human confirmation (H2)', () => {
     const h = harness();
     const plain = createToolHandler(h.ctx, text => text);
     expect(plain.confirmer.available()).toBe(false);
+  });
+});
+
+describe('collection blocklist', () => {
+  it('refuses buys on a blocked collection in every confirmation mode, but still cancels', async () => {
+    for (const mode of ['human', 'ai', 'off']) {
+      const h = harness({ env: { OSWIKI_CONFIRM_MODE: mode, OSWIKI_BLOCKED_COLLECTIONS: COLLECTION } });
+      setupBuy(h);
+      const buy = await h.call('preview_buy', { chainId: 1, askIds: [vectorAskId] });
+      expect(buy.isError, mode).toBe(true);
+      expect(buy.text).toMatch(/is blocked \(OSWIKI_BLOCKED_COLLECTIONS\)/);
+    }
+    const h = harness({ env: { OSWIKI_BLOCKED_COLLECTIONS: COLLECTION } });
+    const ids = setupCancel(h, ['1']);
+    const cancel = await h.call('preview_cancel', { chainId: 1, askIds: ids });
+    expect(cancel.isError).toBe(false);
+  });
+
+  it('needs allowed AND not blocked when both are set', async () => {
+    const h = harness({ env: { OSWIKI_ALLOWED_COLLECTIONS: COLLECTION, OSWIKI_BLOCKED_COLLECTIONS: COLLECTION } });
+    setupBuy(h);
+    expect((await h.call('preview_buy', { chainId: 1, askIds: [vectorAskId] })).text).toMatch(/is blocked/);
+  });
+});
+
+describe('update_limits', () => {
+  function dialog(decision: 'confirmed' | 'declined' = 'confirmed'): HumanConfirmer & { asked: string[] } {
+    const asked: string[] = [];
+    return { asked, available: () => true, ask: async (message) => { asked.push(message); return decision; } };
+  }
+
+  it('shows every change, tighter too, as old -> new and applies it only after approval, without a restart', async () => {
+    const h = harness({ env: { OSWIKI_MAX_BUY_ETH: '1000' } });
+    const approve = dialog();
+    h.handler.confirmer = approve;
+    setupBuy(h);
+    const result = await h.call('update_limits', { maxBuyEth: '0.5', maxTradesPerDay: 10 });
+    expect(result.isError).toBe(false);
+    expect(approve.asked).toHaveLength(1);
+    expect(approve.asked[0]).toContain('- OSWIKI_MAX_BUY_ETH: 1000 -> 0.5');
+    expect(approve.asked[0]).toContain('- OSWIKI_MAX_TRADES_PER_DAY: 50 -> 10');
+    expect(approve.asked[0]).toContain('not the AI');
+    expect(h.ctx.config.maxBuyWei[1]).toBe(ETH / 2n);
+    expect((await h.call('preview_buy', { chainId: 1, askIds: [vectorAskId] })).text).toMatch(/above the per-trade limit of 0\.5 ETH/);
+    const status = (await h.call('wallet_status')).text;
+    expect(status).toContain('- OSWIKI_MAX_BUY_ETH=0.5 (chat)');
+    expect(status).toContain('- OSWIKI_MAX_BUY_APE=100000 (setup/env)');
+  });
+
+  it('loosening needs the dialog too, and a declined dialog changes nothing', async () => {
+    const h = harness({ env: { OSWIKI_CONFIRM_MODE: 'off' } });
+    const decline = dialog('declined');
+    h.handler.confirmer = decline;
+    const result = await h.call('update_limits', { maxBuyEth: '5000', dryRun: false, blockedCollections: { remove: [COLLECTION] } });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/did not approve the setting changes/);
+    expect(decline.asked).toHaveLength(1);
+    expect(h.ctx.config.maxBuyWei[1]).toBe(1000n * ETH);
+    expect(h.settings.overrides).toEqual({});
+    expect(existsSync(join(h.ctx.config.stateDir, 'settings.json'))).toBe(false);
+  });
+
+  it('refuses every change when the client has no dialog, and points to setup', async () => {
+    const h = harness();
+    h.handler.confirmer = NO_HUMAN_CONFIRMER;
+    for (const args of [{ maxBuyEth: '1' }, { dryRun: true }, { confirmMode: 'off' }]) {
+      const result = await h.call('update_limits', args);
+      expect(result.isError).toBe(true);
+      expect(result.text).toMatch(/cannot show it\. The user can run `npx -y @oswikixyz\/sign@.* setup` again/);
+    }
+    expect(h.settings.overrides).toEqual({});
+  });
+
+  it('takes addresses only and refuses emptying the allowlist into "any" without clear', async () => {
+    const h = harness({ env: { OSWIKI_ALLOWED_COLLECTIONS: COLLECTION } });
+    h.handler.confirmer = dialog();
+    expect((await h.call('update_limits', { blockedCollections: { add: ['otherdeed'] } })).text).toMatch(/0x collection addresses only/);
+    expect((await h.call('update_limits', { allowedCollections: { remove: [COLLECTION] } })).text).toMatch(/would allow any collection/);
+    expect((await h.call('update_limits', { allowedCollections: { clear: true } })).isError).toBe(false);
+    expect(h.ctx.config.allowedCollections).toBeNull();
+  });
+
+  it('persists approved changes, MAC-checked: a tampered settings.json is ignored with a warning', async () => {
+    const h = harness();
+    h.handler.confirmer = dialog();
+    await h.call('update_limits', { maxBuyEth: '2', confirmMode: 'off' });
+    const file = join(h.ctx.config.stateDir, 'settings.json');
+    const again = SettingsStore.fromEnv({ OSWIKI_WALLET_KEY: TEST_KEY, OSWIKI_SIGN_STATE_DIR: h.ctx.config.stateDir, OSWIKI_MAX_BUY_ETH: '1000' }, loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY }).stateKey);
+    expect(again.load().maxBuyWei[1]).toBe(2n * ETH);
+    expect(again.load().confirmMode).toBe('off');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('"2"', '"9000"'));
+    const tampered = again.load();
+    expect(tampered.maxBuyWei[1]).toBe(1000n * ETH);
+    expect(tampered.confirmMode).toBe('human');
+    expect(again.warning).toMatch(/failed its integrity check/);
+    const otherWallet = SettingsStore.fromEnv({ OSWIKI_SIGN_STATE_DIR: h.ctx.config.stateDir }, loadWallet({ OSWIKI_WALLET_KEY: `0x${'11'.repeat(32)}` }).stateKey);
+    h.handler.confirmer = dialog();
+    await h.call('update_limits', { maxBuyEth: '3' });
+    expect(otherWallet.load().maxBuyWei[1]).toBeNull();
+    expect(otherWallet.warning).toMatch(/integrity check/);
   });
 });
 

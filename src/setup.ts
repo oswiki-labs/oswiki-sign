@@ -7,8 +7,11 @@ import { createInterface } from 'node:readline';
 import type { Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 
+import { ApiClient, ApiError, type FetchLike } from './api.js';
 import { SetupError } from './config.js';
+import { APECHAIN_ID, MAINNET_ID, OTHERDEED_CONTRACTS, type SupportedChainId } from './constants.js';
 import { loadWallet } from './secret.js';
+import { clearOverrides, readOverrides, settingsFile, settingsMacKey, type Overrides } from './settings.js';
 
 export const SERVER_NAME = 'oswiki-sign';
 export const PACKAGE_NAME = '@oswikixyz/sign';
@@ -36,17 +39,15 @@ Usage:
   npx -y ${PACKAGE_NAME}@<version> setup
   oswiki-sign setup
 
-Asks a few questions in the terminal, then:
-  1. creates a new trading wallet (recommended) or imports an existing private key, and stores the key in
-     ~/.oswiki-sign/key (Windows: %USERPROFILE%\\.oswiki-sign\\key), readable only by you;
-  2. sets the limits: max buy per chain, min % of floor for listings, trades per day, dry run;
-  3. adds oswiki-sign to Claude Code, Cursor or Claude Desktop, or prints the config to copy;
-  4. for Claude Code, adds deny rules to ~/.claude/settings.json so the agent cannot read the key file or
-     change its own setup.
+Five short steps:
+  1/5 Wallet        create a new trading wallet or import a key; stored in ~/.oswiki-sign/key, only you can read it
+  2/5 Limits        max per buy, floor guard, trades per day, dry run
+  3/5 Collections   any, only these, or any except these
+  4/5 Confirmation  approve each trade in oswiki-sign's dialog (recommended), or let the AI trade on its own
+  5/5 Client        add to Claude Code, Cursor or Claude Desktop, or print the config
 
-The key is never printed (unless you ask to see a new key once to back it up) and never written to any client
-config: the config only holds the path of the key file. Existing files are backed up before they are changed.
-Run setup again at any time to change the limits or turn dry run off; it keeps your wallet unless you replace it.`;
+The key is never printed unless you choose to back it up, and never written to a client config.
+Changed files are backed up first. Run setup again any time; it keeps your wallet unless you replace it.`;
 
 export class SetupCancelled extends Error {
   constructor(message = 'Setup cancelled.') {
@@ -73,9 +74,13 @@ export interface SetupDeps {
   exec: Exec;
   now: () => Date;
   generateKey: () => Hex;
+  color: boolean;
+  fetch?: FetchLike;
 }
 
 export type Client = 'claude-code' | 'cursor' | 'claude-desktop' | 'print';
+
+export type CollectionMode = 'any' | 'allow' | 'block';
 
 export interface Limits {
   maxBuyEth: string | null;
@@ -83,6 +88,38 @@ export interface Limits {
   minListFloorPct: string;
   maxTradesPerDay: string;
   dryRun: boolean;
+  confirmOff: boolean;
+  collections?: { mode: CollectionMode; addresses: string[] };
+}
+
+export const NEVER_PASTE = 'Never paste this key into a chat. oswiki-sign and OSWiki never ask for it.';
+
+const ANSI_RE = /\u001b\[[0-9;]*m/g;
+
+/** NO_COLOR (any non-empty value), a dumb terminal or a non-TTY stdout turns colors and box-drawing off. */
+export function useColor(env: NodeJS.ProcessEnv, stdoutIsTTY: boolean): boolean {
+  return stdoutIsTTY && !env.NO_COLOR && env.TERM !== 'dumb';
+}
+
+export function paint(color: boolean) {
+  const wrap = (code: string) => (text: string) => (color ? `\u001b[${code}m${text}\u001b[0m` : text);
+  return { bold: wrap('1'), red: wrap('1;31'), cyan: wrap('1;36'), yellow: wrap('1;33'), dim: wrap('2') };
+}
+
+export function box(lines: string[], color: boolean): string {
+  const visible = (text: string) => text.replace(ANSI_RE, '').length;
+  const width = Math.max(...lines.map(visible));
+  const [tl, tr, bl, br, h, v] = color ? ['┌', '┐', '└', '┘', '─', '│'] : ['+', '+', '+', '+', '-', '|'];
+  const edge = (text: string) => (color ? `\u001b[36m${text}\u001b[0m` : text);
+  return [
+    edge(`${tl}${h.repeat(width + 2)}${tr}`),
+    ...lines.map(line => `${edge(v)} ${line}${' '.repeat(width - visible(line))} ${edge(v)}`),
+    edge(`${bl}${h.repeat(width + 2)}${br}`),
+  ].join('\n');
+}
+
+function shortAddr(address: string, color: boolean): string {
+  return `${address.slice(0, 6)}${color ? '…' : '...'}${address.slice(-4)}`;
 }
 
 interface ServerEntry {
@@ -116,6 +153,11 @@ export function serverEnv(keyFile: string, limits: Limits): Record<string, strin
   if (limits.maxBuyApe !== null) env.OSWIKI_MAX_BUY_APE = limits.maxBuyApe;
   env.OSWIKI_MIN_LIST_FLOOR_PCT = limits.minListFloorPct;
   env.OSWIKI_MAX_TRADES_PER_DAY = limits.maxTradesPerDay;
+  env.OSWIKI_CONFIRM_MODE = limits.confirmOff ? 'off' : 'human';
+  const collections = limits.collections;
+  if (collections && collections.mode !== 'any' && collections.addresses.length > 0) {
+    env[collections.mode === 'allow' ? 'OSWIKI_ALLOWED_COLLECTIONS' : 'OSWIKI_BLOCKED_COLLECTIONS'] = collections.addresses.join(',');
+  }
   return env;
 }
 
@@ -234,18 +276,19 @@ export function writeKeyFile(deps: SetupDeps, path: string, key: Hex): string | 
   return warning;
 }
 
-function inspectKeyFile(path: string, platform: NodeJS.Platform): { exists: false } | { exists: true; address: string | null } {
+function inspectKeyFile(path: string, platform: NodeJS.Platform): { exists: false } | { exists: true; address: string | null; stateKey: Buffer | null } {
   if (!existsSync(path)) return { exists: false };
   try {
-    return { exists: true, address: loadWallet({ OSWIKI_WALLET_KEY_FILE: path }, platform).account.address };
+    const wallet = loadWallet({ OSWIKI_WALLET_KEY_FILE: path }, platform);
+    return { exists: true, address: wallet.account.address, stateKey: wallet.stateKey };
   } catch {
-    return { exists: true, address: null };
+    return { exists: true, address: null, stateKey: null };
   }
 }
 
-async function askYesNo(io: Prompter, question: string, defaultYes: boolean): Promise<boolean> {
+async function askYesNo(io: Prompter, question: string, defaultYes: boolean, hint = ''): Promise<boolean> {
   for (;;) {
-    const answer = (await io.ask(`${question} ${defaultYes ? '(Y/n)' : '(y/N)'} `)).trim().toLowerCase();
+    const answer = (await io.ask(`${question} ${defaultYes ? '(Y/n)' : '(y/N)'}${hint ? ` - ${hint}` : ''} `)).trim().toLowerCase();
     if (answer === '') return defaultYes;
     if (answer === 'y' || answer === 'yes') return true;
     if (answer === 'n' || answer === 'no') return false;
@@ -253,25 +296,24 @@ async function askYesNo(io: Prompter, question: string, defaultYes: boolean): Pr
   }
 }
 
-async function askChoice<T>(io: Prompter, question: string, options: { label: string; value: T }[], defaultIndex: number): Promise<T> {
-  io.print(question);
-  options.forEach((option, index) => io.print(`  ${index + 1}) ${option.label}`));
+async function askChoice<T>(io: Prompter, options: { label: string; value: T }[], defaultIndex: number): Promise<T> {
+  const line = options.map((option, index) => `${index + 1}) ${option.label}`).join('  ');
   for (;;) {
-    const answer = (await io.ask(`Choose 1-${options.length} [${defaultIndex + 1}]: `)).trim();
+    const answer = (await io.ask(`${line} [${defaultIndex + 1}]: `)).trim();
     const index = answer === '' ? defaultIndex : Number(answer) - 1;
     const option = /^\d*$/.test(answer) ? options[index] : undefined;
     if (option) return option.value;
-    io.print(`Please enter a number from 1 to ${options.length}.`);
+    io.print(`Please enter 1-${options.length}.`);
   }
 }
 
 async function askAmount(io: Prompter, question: string, fallback: string): Promise<string | null> {
   for (;;) {
-    const answer = (await io.ask(`${question} [${fallback}, or "skip"]: `)).trim().toLowerCase();
+    const answer = (await io.ask(`${question} [${fallback}]: `)).trim().toLowerCase();
     if (answer === 'skip') return null;
     const value = answer === '' ? fallback : answer;
     if (AMOUNT_RE.test(value) && /[1-9]/.test(value)) return value;
-    io.print('Please enter an amount like 0.05, or "skip".');
+    io.print('Enter an amount like 0.05, or "skip".');
   }
 }
 
@@ -284,106 +326,212 @@ async function askInt(io: Prompter, question: string, fallback: string, max: num
   }
 }
 
-async function askPrivateKey(io: Prompter): Promise<Hex> {
-  io.print('The key is read at a hidden prompt: nothing you type or paste is shown.');
+async function askPrivateKey(deps: SetupDeps): Promise<Hex> {
+  const { io } = deps;
+  const p = paint(deps.color);
   for (let attempt = 0; attempt < 3; attempt++) {
-    const raw = (await io.askSecret('Private key (0x followed by 64 hex characters): ')).trim();
+    const raw = (await io.askSecret(p.yellow('Paste the private key (hidden): '))).trim();
     if (KEY_RE.test(raw)) {
       const key = `0x${(raw.startsWith('0x') ? raw.slice(2) : raw).toLowerCase()}` as Hex;
       try {
         privateKeyToAccount(key);
         return key;
       } catch {
-        io.print('That is not a valid secp256k1 private key.');
+        io.print('Not a valid secp256k1 private key.');
         continue;
       }
     }
-    io.print('That is not a private key: it must be 0x followed by 64 hex characters (a seed phrase does not work here).');
+    io.print('Not a private key: 0x + 64 hex characters (a seed phrase does not work).');
   }
   throw new SetupCancelled('No valid private key entered. Nothing was changed.');
 }
 
-async function walletStep(deps: SetupDeps, keyFile: string): Promise<{ address: string; firstSetup: boolean }> {
-  const { io } = deps;
+interface WalletResult {
+  address: string;
+  firstSetup: boolean;
+  stateKey: Buffer | null;
+}
+
+async function walletStep(deps: SetupDeps, keyFile: string): Promise<WalletResult> {
+  const { io, color } = deps;
+  const p = paint(color);
+  const never = p.red(NEVER_PASTE);
   io.print('');
-  io.print('Step 1 of 4: wallet');
+  io.print(p.bold('1/5 Wallet'));
   const existing = inspectKeyFile(keyFile, deps.platform);
   if (existing.exists) {
     if (existing.address) {
-      io.print(`A key file already exists: ${keyFile}`);
-      io.print(`It belongs to the wallet ${existing.address}.`);
-      if (await askYesNo(io, 'Keep using this wallet?', true)) return { address: existing.address, firstSetup: false };
+      io.print(box([p.bold('Your trading wallet'), p.cyan(existing.address), `Key file: ${keyFile}`, never], color));
+      if (await askYesNo(io, 'Keep it?', true)) return { address: existing.address, firstSetup: false, stateKey: existing.stateKey };
     } else {
-      io.print(`${keyFile} already exists but does not hold a valid private key.`);
+      io.print(`${keyFile} does not hold a valid key.`);
     }
-    io.print('Replacing it moves the current key file to a key.bak-<time> file next to it. Anything left in the old wallet stays there, and that backup is the only way to reach it.');
-    if (!(await askYesNo(io, 'Replace the existing key file?', false))) throw new SetupCancelled('Setup cancelled. The existing key file was not changed.');
+    if (!(await askYesNo(io, 'Replace the key file?', false, 'the old one is moved to key.bak-<time>'))) throw new SetupCancelled('Setup cancelled. The key file was not changed.');
   }
 
-  const mode = await askChoice(io, 'Create a new trading wallet (recommended) or import an existing key?', [
-    { label: 'Create a new trading wallet (recommended)', value: 'create' as const },
-    { label: 'Import an existing private key', value: 'import' as const },
+  const mode = await askChoice(io, [
+    { label: 'New wallet (recommended)', value: 'create' as const },
+    { label: 'Import key', value: 'import' as const },
   ], 0);
 
   let key: Hex;
   if (mode === 'create') {
     key = deps.generateKey();
   } else {
-    io.print('Use a separate trading wallet, never your main wallet.');
-    key = await askPrivateKey(io);
+    key = await askPrivateKey(deps);
+    const derived = privateKeyToAccount(key).address;
+    io.print(box([p.bold('This key belongs to'), p.cyan(derived), never], color));
+    if (!(await askYesNo(io, 'Use this wallet?', true))) throw new SetupCancelled('Setup cancelled. Nothing was changed.');
   }
   const address = privateKeyToAccount(key).address;
-  if (mode === 'import') {
-    io.print(`This key belongs to ${address}.`);
-    if (!(await askYesNo(io, 'Is this the trading wallet you want to use?', true))) throw new SetupCancelled('Setup cancelled. Nothing was changed.');
-  }
 
   if (existing.exists) {
-    const backup = `${keyFile}.bak-${timestamp(deps.now())}`;
-    renameSync(keyFile, backup);
-    io.print(`The previous key file was moved to ${backup}`);
+    renameSync(keyFile, `${keyFile}.bak-${timestamp(deps.now())}`);
+    clearOverrides(dirname(keyFile));
   }
   const warning = writeKeyFile(deps, keyFile, key);
-  io.print(`Saved the key to ${keyFile} (readable only by you).`);
   if (warning) io.print(warning);
 
   if (mode === 'create') {
-    io.print('');
-    io.print(`Your new trading wallet: ${address}`);
-    io.print('Send the NFTs you want to trade and a little ETH (Ethereum) / APE (ApeChain) for gas to this address.');
-    io.print('');
-    io.print('The key file is the only copy of this wallet\'s key. If you lose it, anything in the wallet is lost.');
-    io.print('Anyone who sees the key can take everything in the wallet, so only show it on a screen nobody else can see.');
-    if (await askYesNo(io, 'Show the private key once so you can back it up?', false)) {
-      io.print('');
-      io.print(`Private key: ${key}`);
-      io.print('');
-      await io.ask('Store it somewhere safe (a password manager), then press Enter to clear the screen. ');
+    io.print(box([
+      p.bold('Your new trading wallet'),
+      p.cyan(address),
+      `Key saved to ${keyFile} (only you can read it)`,
+      'Fund it: the NFTs to trade + a little ETH / APE for gas',
+      never,
+    ], color));
+    if (await askYesNo(io, 'Back up the private key now?', false, 'if you lose the key file, the wallet is gone')) {
+      io.print(box([p.bold('Private key - store it in a password manager'), p.yellow(key)], color));
+      await io.ask('Press Enter after you saved it ');
       io.print('\u001b[2J\u001b[3J\u001b[H');
+      io.print(`Wallet ${address} - key backed up, screen cleared.`);
     }
+  } else {
+    io.print(`Key saved to ${keyFile} (only you can read it).`);
   }
-  return { address, firstSetup: !existing.exists };
+  return { address, firstSetup: !existing.exists, stateKey: null };
 }
 
-async function limitsStep(io: Prompter): Promise<Limits> {
+async function chatOverridesStep(deps: SetupDeps, wallet: WalletResult): Promise<Overrides> {
+  if (!wallet.stateKey) return {};
+  const stateDir = join(deps.home, '.oswiki-sign');
+  if (!existsSync(settingsFile(stateDir))) return {};
+  const { overrides } = readOverrides(stateDir, settingsMacKey(wallet.stateKey));
+  const entries = Object.entries(overrides);
+  if (entries.length === 0) return {};
+  deps.io.print(`Changed from the chat (these win over setup): ${entries.map(([key, value]) => `${key}=${value || '(unset)'}`).join(', ')}`);
+  if (await askYesNo(deps.io, 'Keep the chat changes?', true)) return overrides;
+  clearOverrides(stateDir);
+  deps.io.print('Chat changes cleared.');
+  return {};
+}
+
+async function limitsStep(deps: SetupDeps): Promise<Pick<Limits, 'maxBuyEth' | 'maxBuyApe' | 'minListFloorPct' | 'maxTradesPerDay' | 'dryRun'>> {
+  const { io } = deps;
   io.print('');
-  io.print('Step 2 of 4: limits');
-  io.print('oswiki-sign refuses anything above these limits, whatever the AI says. "skip" turns buys and offers off on that chain (listing and cancelling still work).');
-  const maxBuyEth = await askAmount(io, 'Most one buy or offer may spend on Ethereum, in ETH', '0.05');
-  const maxBuyApe = await askAmount(io, 'Most one buy or offer may spend on ApeChain, in APE', '50');
-  io.print('Floor guard: a typo like 0.05 instead of 0.5 is refused instead of selling far under the market. 0 turns it off.');
-  const minListFloorPct = await askInt(io, 'Refuse listings and accepted offers below this % of the floor (0 = off)', '50', 100);
-  const maxTradesPerDay = await askInt(io, 'Most trades per day', '50', 100000);
-  io.print('Dry run: previews work, but nothing is signed or sent. Start with it on and turn it off once the previews look right.');
-  const dryRun = await askYesNo(io, 'Turn dry run on?', true);
+  io.print(paint(deps.color).bold('2/5 Limits'));
+  const maxBuyEth = await askAmount(io, 'Max per buy, ETH (skip = no buys)', '0.05');
+  const maxBuyApe = await askAmount(io, 'Max per buy, APE (skip = no buys)', '50');
+  const minListFloorPct = await askInt(io, 'Floor guard, % of floor (0 = off)', '50', 100);
+  const maxTradesPerDay = await askInt(io, 'Trades per day', '50', 100000);
+  const dryRun = await askYesNo(io, 'Dry run (nothing is sent)?', false);
   return { maxBuyEth, maxBuyApe, minListFloorPct, maxTradesPerDay, dryRun };
 }
 
+interface FoundCollection {
+  name: string;
+  chainId: SupportedChainId;
+  address: string;
+}
+
+const CHAIN_LABEL: Record<SupportedChainId, string> = { [MAINNET_ID]: 'Ethereum', [APECHAIN_ID]: 'ApeChain' };
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/i;
+
+/** Each entry is looked up on both chains; a slug can exist on both. Otherdeed always brings its second contract. */
+export async function resolveCollections(api: ApiClient, entries: string[]): Promise<{ found: FoundCollection[]; unknown: string[]; offline: boolean }> {
+  let offline = false;
+  const lookup = async (chainId: SupportedChainId, value: string): Promise<FoundCollection | null> => {
+    try {
+      const info = await api.collection(chainId, value);
+      return ADDRESS_RE.test(info.address) ? { name: info.name || info.address, chainId, address: info.address.toLowerCase() } : null;
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.status === null || err.status >= 500) offline = true;
+      return null;
+    }
+  };
+  const found: FoundCollection[] = [];
+  const unknown: string[] = [];
+  for (const entry of entries) {
+    if (!ADDRESS_RE.test(entry) && !SLUG_RE.test(entry)) {
+      unknown.push(entry);
+      continue;
+    }
+    const hits = (await Promise.all(([MAINNET_ID, APECHAIN_ID] as const).map(chainId => lookup(chainId, entry)))).filter((hit): hit is FoundCollection => hit !== null);
+    if (hits.length === 0) unknown.push(entry);
+    found.push(...hits);
+  }
+  for (const hit of [...found]) {
+    if (hit.chainId !== MAINNET_ID || !OTHERDEED_CONTRACTS.includes(hit.address)) continue;
+    for (const sibling of OTHERDEED_CONTRACTS) {
+      if (found.some(entry => entry.chainId === MAINNET_ID && entry.address === sibling)) continue;
+      found.push((await lookup(MAINNET_ID, sibling)) ?? { name: 'Otherdeed', chainId: MAINNET_ID, address: sibling });
+    }
+  }
+  const seen = new Set<string>();
+  return { found: found.filter(entry => !seen.has(`${entry.chainId}:${entry.address}`) && seen.add(`${entry.chainId}:${entry.address}`)), unknown, offline };
+}
+
+async function collectionsStep(deps: SetupDeps): Promise<NonNullable<Limits['collections']>> {
+  const { io } = deps;
+  io.print('');
+  io.print(paint(deps.color).bold('3/5 Collections'));
+  const mode = await askChoice<CollectionMode>(io, [
+    { label: 'Any', value: 'any' },
+    { label: 'Only these', value: 'allow' },
+    { label: 'Any except these', value: 'block' },
+  ], 0);
+  if (mode === 'any') return { mode, addresses: [] };
+  const api = new ApiClient({ apiKey: null, fetch: deps.fetch, timeoutMs: 10_000 });
+  for (;;) {
+    const entries = (await io.ask('Slugs or 0x addresses, comma-separated: ')).split(',').map(entry => entry.trim()).filter(Boolean);
+    if (entries.length === 0) {
+      io.print('Enter at least one collection.');
+      continue;
+    }
+    const { found, unknown, offline } = await resolveCollections(api, entries);
+    let addresses: string[];
+    if (offline) {
+      if (!entries.every(entry => ADDRESS_RE.test(entry))) {
+        io.print('OSWiki API unreachable: enter 0x addresses instead.');
+        continue;
+      }
+      io.print('OSWiki API unreachable: using the addresses as typed.');
+      addresses = entries.map(entry => entry.toLowerCase());
+      for (const address of addresses) io.print(`  ${address}`);
+    } else {
+      if (unknown.length > 0) {
+        io.print(`Not found: ${unknown.join(', ')}`);
+        continue;
+      }
+      for (const entry of found) io.print(`  ${entry.name} (${CHAIN_LABEL[entry.chainId]}) ${entry.address}`);
+      addresses = [...new Set(found.map(entry => entry.address))];
+    }
+    if (await askYesNo(io, 'Use these?', true)) return { mode, addresses };
+  }
+}
+
+async function confirmationStep(deps: SetupDeps): Promise<boolean> {
+  const { io } = deps;
+  io.print('');
+  io.print(paint(deps.color).bold('4/5 Confirmation'));
+  io.print('  No = you approve each trade in a dialog (recommended)');
+  return askYesNo(io, 'Let the AI trade without asking you?', false);
+}
+
 function printConfig(io: Prompter, deps: SetupDeps, entry: ServerEntry): void {
-  io.print('');
-  io.print('Claude Desktop (claude_desktop_config.json) and Cursor (~/.cursor/mcp.json), inside "mcpServers":');
+  io.print('Claude Desktop / Cursor, inside "mcpServers":');
   io.print(JSON.stringify({ mcpServers: { [SERVER_NAME]: entry } }, null, 2));
-  io.print('');
   io.print('Claude Code:');
   io.print(displayCommand(['claude', ...claudeAddArgs(deps.version, entry.env, deps.platform)], deps.platform));
 }
@@ -395,7 +543,7 @@ async function addToClaudeCode(deps: SetupDeps, entry: ServerEntry): Promise<boo
   const claude = findExecutable('claude', deps.env, deps.platform);
   const add = claude ? claudeInvocation(claude, args, deps.env) : null;
   if (!claude || !add) {
-    io.print(claude ? 'The claude command cannot be run safely with this key file path. Run this yourself:' : 'The claude command was not found. Run this yourself:');
+    io.print(claude ? 'The claude command cannot run safely with this key path. Run this yourself:' : 'claude not found. Run this yourself:');
     io.print(printed);
     return false;
   }
@@ -408,15 +556,9 @@ async function addToClaudeCode(deps: SetupDeps, entry: ServerEntry): Promise<boo
     exists = false;
   }
 
-  io.print('This runs:');
-  io.print(printed);
-  if (exists) {
-    io.print(`Claude Code already has a user-scope "${SERVER_NAME}" server.`);
-    if (!(await askYesNo(io, 'Replace it?', true))) {
-      io.print('Kept the existing Claude Code entry.');
-      return false;
-    }
-  } else if (!(await askYesNo(io, 'Add it?', true))) {
+  if (!(await askYesNo(io, exists ? `Replace the existing ${SERVER_NAME} in Claude Code?` : `Add ${SERVER_NAME} to Claude Code?`, true))) {
+    io.print('Not added. To add it later, run:');
+    io.print(printed);
     return false;
   }
 
@@ -431,26 +573,22 @@ async function addToClaudeCode(deps: SetupDeps, entry: ServerEntry): Promise<boo
     io.print(printed);
     return false;
   }
-  io.print(`Added ${SERVER_NAME} to Claude Code (user scope, stored in ~/.claude.json).`);
+  io.print('Added to Claude Code (user scope).');
   return true;
 }
 
-async function addToJsonConfig(deps: SetupDeps, path: string, label: string, entry: ServerEntry): Promise<boolean> {
+async function addToJsonConfig(deps: SetupDeps, path: string, entry: ServerEntry): Promise<boolean> {
   const { io } = deps;
-  const config = readJsonObject(path, `The ${label} config`);
+  const config = readJsonObject(path, path);
   const servers = config?.mcpServers;
   if (servers !== undefined && (servers === null || typeof servers !== 'object' || Array.isArray(servers))) {
     throw new SetupError(`"mcpServers" in ${path} is not an object. Nothing was changed.`);
   }
-  io.print(`${config ? 'Adding to' : 'Creating'} ${path}:`);
-  io.print(JSON.stringify({ mcpServers: { [SERVER_NAME]: entry } }, null, 2));
-  if (servers && SERVER_NAME in (servers as Json)) io.print(`This replaces the existing "${SERVER_NAME}" entry. Other servers are kept.`);
-  if (!(await askYesNo(io, 'Write this?', true))) return false;
-
-  if (config) {
-    const backup = backupFile(path, deps.now());
-    io.print(`Backed up the original to ${backup}`);
+  if (!(await askYesNo(io, `Add ${SERVER_NAME} to ${path}?`, true))) {
+    printConfig(io, deps, entry);
+    return false;
   }
+  if (config) io.print(`Backup: ${backupFile(path, deps.now())}`);
   writeJson(path, { ...(config ?? {}), mcpServers: { ...((servers as Json | undefined) ?? {}), [SERVER_NAME]: entry } });
   io.print(`Saved ${path}`);
   return true;
@@ -459,13 +597,9 @@ async function addToJsonConfig(deps: SetupDeps, path: string, label: string, ent
 async function hardenClaudeCode(deps: SetupDeps): Promise<void> {
   const { io } = deps;
   const path = join(deps.home, '.claude', 'settings.json');
-  io.print('');
-  io.print('Step 4 of 4: Claude Code hardening');
-  io.print('These deny rules stop the agent from reading the key file and from changing its own setup (limits, confirm mode, MCP servers, hooks):');
-  for (const rule of DENY_RULES) io.print(`  ${rule}`);
-  if (await askYesNo(io, `Add them to ${path}?`, true)) io.print(addDenyRules(deps, path));
-  else io.print('Skipped. See "Claude Code hardening" in the README to add them later.');
-  printSandbox(io);
+  io.print('  Deny rules stop the agent from reading the key or editing its own setup.');
+  if (await askYesNo(io, 'Add deny rules to ~/.claude/settings.json?', true)) io.print(addDenyRules(deps, path));
+  io.print('Also turn on /sandbox with ~/.oswiki-sign denied (README; on Windows use WSL2).');
 }
 
 function addDenyRules(deps: SetupDeps, path: string): string {
@@ -485,70 +619,54 @@ function addDenyRules(deps: SetupDeps, path: string): string {
   }
   const current = (deny as string[] | undefined) ?? [];
   const missing = DENY_RULES.filter(rule => !current.includes(rule));
-  if (missing.length === 0) return 'All rules are already there.';
-  const lines: string[] = [];
-  if (settings) lines.push(`Backed up the original to ${backupFile(path, deps.now())}`);
+  if (missing.length === 0) return 'Deny rules already there.';
+  if (settings) backupFile(path, deps.now());
   writeJson(path, { ...(settings ?? {}), permissions: { ...((permissions as Json | undefined) ?? {}), deny: [...current, ...missing] } });
-  lines.push(`Added ${missing.length} deny rule${missing.length === 1 ? '' : 's'} to ${path}`);
-  return lines.join('\n');
-}
-
-function printSandbox(io: Prompter): void {
-  io.print('');
-  io.print('Also turn on the Claude Code sandbox (/sandbox) with ~/.oswiki-sign in its denyRead and denyWrite lists (see "Claude Code hardening" in the README).');
-  io.print('Deny rules cover Claude\'s file tools and the shell commands it recognizes, not a script that opens files itself (node -e, python -c); the sandbox closes that gap.');
-  io.print('It runs on macOS, Linux and WSL2. On native Windows commands run unsandboxed, so run Claude Code inside WSL2 if you trade with it on Windows.');
+  return `Added ${missing.length} deny rule${missing.length === 1 ? '' : 's'}.`;
 }
 
 async function flow(deps: SetupDeps): Promise<void> {
-  const { io } = deps;
+  const { io, color } = deps;
+  const p = paint(color);
   const keyFile = keyFilePath(deps.home);
-  io.print(`oswiki-sign ${deps.version} setup`);
-  io.print('This creates or imports a trading wallet, sets its limits and adds oswiki-sign to your AI client.');
-  io.print('Use a separate trading wallet that only holds what you are willing to trade, never your main wallet.');
+  io.print(p.bold(`oswiki-sign ${deps.version} setup`));
+  io.print('Use a separate trading wallet, never your main wallet.');
 
   const wallet = await walletStep(deps, keyFile);
-  const limits = await limitsStep(io);
+  const kept = await chatOverridesStep(deps, wallet);
+  const limits: Limits = { ...(await limitsStep(deps)), collections: await collectionsStep(deps), confirmOff: await confirmationStep(deps) };
   const entry = serverEntry(deps.version, serverEnv(keyFile, limits));
 
   io.print('');
-  io.print('Step 3 of 4: AI client');
-  const client = await askChoice<Client>(io, 'Which AI client should run oswiki-sign?', [
+  io.print(p.bold('5/5 Client'));
+  const client = await askChoice<Client>(io, [
     { label: 'Claude Code', value: 'claude-code' },
     { label: 'Cursor', value: 'cursor' },
     { label: 'Claude Desktop', value: 'claude-desktop' },
-    { label: 'Just print the config', value: 'print' },
+    { label: 'Print config', value: 'print' },
   ], 0);
-  io.print('The config holds only the path of the key file, never the key.');
 
   let configured = false;
   if (client === 'claude-code') configured = await addToClaudeCode(deps, entry);
-  else if (client === 'cursor') configured = await addToJsonConfig(deps, cursorConfigPath(deps.home), 'Cursor', entry);
-  else if (client === 'claude-desktop') configured = await addToJsonConfig(deps, claudeDesktopConfigPath(deps.platform, deps.home, deps.env), 'Claude Desktop', entry);
+  else if (client === 'cursor') configured = await addToJsonConfig(deps, cursorConfigPath(deps.home), entry);
+  else if (client === 'claude-desktop') configured = await addToJsonConfig(deps, claudeDesktopConfigPath(deps.platform, deps.home, deps.env), entry);
   else printConfig(io, deps, entry);
 
   if (client === 'claude-code') await hardenClaudeCode(deps);
-  else {
-    io.print('');
-    io.print('Step 4 of 4: hardening');
-    io.print(`Make sure the agent in your client cannot read ${dirname(keyFile)} or edit its MCP config; see "Claude Code hardening" in the README for the idea.`);
-  }
+  else io.print(`Make sure the agent cannot read ${dirname(keyFile)} or edit its MCP config.`);
 
   const clientName = { 'claude-code': 'Claude Code', cursor: 'Cursor', 'claude-desktop': 'Claude Desktop', print: 'your AI client' }[client];
+  const collections = limits.collections;
+  const scope = !collections || collections.mode === 'any'
+    ? 'any collection'
+    : `${collections.mode === 'allow' ? 'only' : 'blocked'} ${collections.addresses.length} collection${collections.addresses.length === 1 ? '' : 's'}`;
+  const confirmation = limits.confirmOff ? p.red('confirmation OFF - AI trades on its own within your limits') : 'dialog on';
   io.print('');
-  io.print('Done.');
-  io.print(`Wallet: ${wallet.address}`);
-  io.print(`Key file: ${keyFile}`);
-  io.print(`Dry run: ${limits.dryRun ? 'on (nothing is signed or sent)' : 'OFF (trades are signed and sent after your confirmation)'}`);
-  io.print('');
-  io.print('Next steps:');
-  io.print(`  1. ${configured ? `Restart ${clientName}` : `Add the config to ${clientName}, then restart it`}.`);
-  io.print('  2. Ask: "wallet status".');
-  io.print('  3. Keep the hosted OSWiki MCP (https://mcp.oswiki.xyz/mcp) installed too: the AI uses it to look up collections, floors and listings.');
-  if (limits.dryRun) {
-    io.print(`  4. When the dry-run previews look right, turn dry run off: run setup again (it keeps your wallet) or set OSWIKI_DRY_RUN to 0 in the ${SERVER_NAME} config, then restart the client.`);
-  }
-  if (wallet.firstSetup) io.print('Never paste the private key into a chat. oswiki-sign never asks for it, and the AI must not either.');
+  io.print(`${p.bold('Done.')} Wallet ${shortAddr(wallet.address, color)} · dry run ${limits.dryRun ? 'on' : 'off'} · ${confirmation} · ${scope}`);
+  if (Object.keys(kept).length > 0) io.print(`Chat changes kept, they win: ${Object.keys(kept).join(', ')}`);
+  io.print(`Next: fund the wallet, ${configured ? `restart ${clientName}` : `add the config to ${clientName} and restart it`}, ask "wallet status".`);
+  io.print('Keep the hosted OSWiki MCP (https://mcp.oswiki.xyz/mcp) for lookups.');
+  io.print(p.red('Never paste the private key into a chat.'));
 }
 
 export async function runSetup(argv: string[], deps: SetupDeps): Promise<number> {
@@ -661,5 +779,6 @@ export function defaultSetupDeps(version: string): SetupDeps {
     exec: (file, args, options) => execFileSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, ...options }),
     now: () => new Date(),
     generateKey: generatePrivateKey,
+    color: useColor(process.env, process.stdout.isTTY === true),
   };
 }

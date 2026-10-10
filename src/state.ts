@@ -203,11 +203,8 @@ export class TradeState {
   }
 
   private write(state: Stored): void {
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     const body = this.body(state);
-    const tmp = `${this.file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-    writeFileSync(tmp, `${body.slice(0, -1)},"mac":"${this.mac(body)}"}`, { mode: 0o600 });
-    renameSync(tmp, this.file);
+    atomicWrite(this.dir, this.file, `${body.slice(0, -1)},"mac":"${this.mac(body)}"}`);
   }
 
   private tampered(): Stored {
@@ -251,33 +248,45 @@ export class TradeState {
   }
 
   private locked<T>(task: () => T): T {
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-    const deadline = Date.now() + LOCK_WAIT_MS;
-    for (;;) {
+    return withFileLock(this.dir, this.lockFile, task);
+  }
+}
+
+export function atomicWrite(dir: string, file: string, content: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+  writeFileSync(tmp, content, { mode: 0o600 });
+  renameSync(tmp, file);
+}
+
+/** Serializes a task across processes with an O_EXCL lock file; a lock older than LOCK_STALE_MS is taken over. */
+export function withFileLock<T>(dir: string, lockFile: string, task: () => T): T {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      const fd = openSync(lockFile, 'wx', 0o600);
+      writeSync(fd, `${process.pid} ${Date.now()}`);
+      closeSync(fd);
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       try {
-        const fd = openSync(this.lockFile, 'wx', 0o600);
-        writeSync(fd, `${process.pid} ${Date.now()}`);
-        closeSync(fd);
-        break;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-        try {
-          if (Date.now() - statSync(this.lockFile).mtimeMs > LOCK_STALE_MS) {
-            unlinkSync(this.lockFile);
-            continue;
-          }
-        } catch {
+        if (Date.now() - statSync(lockFile).mtimeMs > LOCK_STALE_MS) {
+          unlinkSync(lockFile);
           continue;
         }
-        if (Date.now() > deadline) throw new StateLockError();
-        sleepSync(25);
+      } catch {
+        continue;
       }
+      if (Date.now() > deadline) throw new StateLockError();
+      sleepSync(25);
     }
-    try {
-      return task();
-    } finally {
-      rmSync(this.lockFile, { force: true });
-    }
+  }
+  try {
+    return task();
+  } finally {
+    rmSync(lockFile, { force: true });
   }
 }
 

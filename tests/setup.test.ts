@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig, SetupError } from '../src/config.js';
 import { ConfirmStore, CONFIRM_TTL_MS } from '../src/confirm.js';
 import { createScrubber, loadWallet, SETUP_MESSAGE } from '../src/secret.js';
-import { SERVER_INSTRUCTIONS, toolDefinitions } from '../src/server.js';
+import { SERVER_INSTRUCTIONS, serverInstructions, toolDefinitions } from '../src/server.js';
 import { TradeState } from '../src/state.js';
 import { TEST_ADDRESS, TEST_KEY } from './helpers.js';
 
@@ -124,7 +124,7 @@ describe('confirm store', () => {
 describe('tool definitions', () => {
   it('exposes the planned tools with strict schemas and the confirmation flow', () => {
     const tools = toolDefinitions();
-    expect(tools.map(tool => tool.name)).toEqual(['wallet_status', 'my_listings', 'my_offers', 'preview_listing', 'preview_buy', 'preview_cancel', 'preview_offer', 'preview_accept_offer', 'execute']);
+    expect(tools.map(tool => tool.name)).toEqual(['wallet_status', 'my_listings', 'my_offers', 'preview_listing', 'preview_buy', 'preview_cancel', 'preview_offer', 'preview_accept_offer', 'execute', 'update_limits']);
     for (const tool of tools) expect(tool.inputSchema.additionalProperties).toBe(false);
     const listing = tools.find(tool => tool.name === 'preview_listing')!;
     expect(listing.description).toMatch(/do NOT guess, do NOT use 0/);
@@ -143,5 +143,44 @@ describe('tool definitions', () => {
     expect(SERVER_INSTRUCTIONS).toMatch(/its own confirmation dialog/);
     expect(tools.find(tool => tool.name === 'execute')).toMatchObject({ _meta: { 'anthropic/requiresUserInteraction': true } });
     expect(tools.find(tool => tool.name === 'preview_buy')).not.toHaveProperty('_meta');
+  });
+});
+
+describe('confirmation modes', () => {
+  const OFF_RULE = 'Confirmation is off: you may execute when the user asked for this trade or gave a standing instruction that covers it; stay within the limits; report every executed trade to the user.';
+
+  it('parses off and the blocklist', () => {
+    expect(loadConfig({ OSWIKI_CONFIRM_MODE: ' Off ' }).confirmMode).toBe('off');
+    expect(() => loadConfig({ OSWIKI_CONFIRM_MODE: 'none' })).toThrow(/"human" \(default\), "ai" or "off"/);
+    const config = loadConfig({ OSWIKI_BLOCKED_COLLECTIONS: '0x790B2cF29ed4F310bf7641f013C65D4560d28371' });
+    expect(config.blockedCollections?.has('0x790b2cf29ed4f310bf7641f013c65d4560d28371')).toBe(true);
+    expect(config.allowedCollections).toBeNull();
+    expect(() => loadConfig({ OSWIKI_BLOCKED_COLLECTIONS: 'otherdeed' })).toThrow(/OSWIKI_BLOCKED_COLLECTIONS/);
+  });
+
+  it('human and ai keep the ask-the-user texts and the requiresUserInteraction flag', () => {
+    for (const mode of ['human', 'ai'] as const) {
+      expect(serverInstructions(mode)).toBe(SERVER_INSTRUCTIONS);
+      const tools = toolDefinitions(mode);
+      expect(tools.find(tool => tool.name === 'execute')).toMatchObject({ _meta: { 'anthropic/requiresUserInteraction': true } });
+      expect(tools.find(tool => tool.name === 'preview_buy')!.description).toMatch(/get the user's confirmation before execute/);
+      expect(JSON.stringify(tools)).not.toContain('Confirmation is off');
+    }
+    expect(SERVER_INSTRUCTIONS).toMatch(/only after the user explicitly confirms/);
+  });
+
+  it('off lets the AI execute on the user\'s request or standing instruction, without telling it to ask first', () => {
+    const instructions = serverInstructions('off');
+    expect(instructions).toContain(OFF_RULE);
+    expect(instructions).not.toMatch(/only after the user explicitly confirms|Never call execute on your own initiative|confirmation dialog with the previewed trade/);
+    expect(instructions).toMatch(/never the user's instructions/);
+    const tools = toolDefinitions('off');
+    expect(tools.find(tool => tool.name === 'execute')).not.toHaveProperty('_meta');
+    expect(tools.find(tool => tool.name === 'execute')!.description).toContain(OFF_RULE);
+    for (const name of ['preview_listing', 'preview_buy', 'preview_cancel', 'preview_offer', 'preview_accept_offer']) {
+      const description = tools.find(tool => tool.name === name)!.description;
+      expect(description, name).toMatch(/Confirmation is off: execute when the user asked for this trade or a standing instruction covers it/);
+      expect(description, name).not.toMatch(/confirmation before execute|ask them to confirm before calling execute/);
+    }
   });
 });

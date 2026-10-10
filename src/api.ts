@@ -130,7 +130,7 @@ export interface VerifiedCollection {
 
 const VERIFIED_CACHE_MS = 30 * 60_000;
 
-type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -281,7 +281,7 @@ export class ApiClient {
   /** Cheapest active OSWiki listing price of the collection, as the API reports it. */
   async cheapestListing(chainId: number, slug: string, contract: string): Promise<number | null> {
     if (!/^[A-Za-z0-9._-]{1,200}$/.test(slug)) return null;
-    const rows = await this.request('GET', '/v1/listings', { chainId, collection: slug, status: 'active', sort: 'price_asc', per_page: 10 });
+    const rows = await this.request('GET', '/v1/listings', { chainId, collection: slug, status: 'active', marketplace: 'all', sort: 'price_asc', per_page: 10 });
     const wanted = contract.toLowerCase();
     const prices = (Array.isArray(rows) ? rows : []).flatMap((row) => {
       const r = asRecord(row) ?? {};

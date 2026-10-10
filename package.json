@@ -1,6 +1,6 @@
 {
   "name": "@oswikixyz/sign",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local OSWiki trading signer: an MCP server that lists, buys, cancels and makes offers with a key that never leaves your machine",
   "author": "OSWiki Labs",
   "license": "MIT",

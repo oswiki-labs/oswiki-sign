@@ -7,17 +7,18 @@ The private key stays on your machine. The AI never sees it, the hosted OSWiki M
 ## Quick setup
 
 ```sh
-npx -y @oswikixyz/sign@0.1.1 setup
+npx -y @oswikixyz/sign@0.1.2 setup
 ```
 
-Run it in a terminal (Node.js 20 or newer). It asks a few questions and then:
+Run it in a terminal (Node.js 20 or newer). Five short steps:
 
-1. creates a new trading wallet (recommended) or imports an existing private key at a hidden prompt, and stores the key in `~/.oswiki-sign/key` (Windows: `%USERPROFILE%\.oswiki-sign\key`), readable only by you. A new wallet's address is shown so you can fund it; the key itself is only shown if you ask to see it once for a backup.
-2. sets the limits: max buy per chain (or buys and offers off), the minimum % of the floor for listings, trades per day, and dry run (on by default).
-3. adds oswiki-sign to Claude Code (`claude mcp add --scope user`), Cursor (`~/.cursor/mcp.json`) or Claude Desktop (`claude_desktop_config.json`), or prints the config for you to copy. The config holds only the path of the key file, never the key, and always the exact version.
-4. for Claude Code, adds the [hardening](#claude-code-hardening) deny rules to `~/.claude/settings.json`.
+1. **Wallet**: creates a new trading wallet (recommended) or imports a private key at a hidden prompt, and stores the key in `~/.oswiki-sign/key` (Windows: `%USERPROFILE%\.oswiki-sign\key`), readable only by you. The key is only shown if you choose to back it up.
+2. **Limits**: max per buy on each chain (or no buys), the floor guard (% of the floor), trades per day, dry run.
+3. **Collections**: any, only these (allowlist) or any except these (blocklist). Type slugs or `0x` addresses; setup looks them up on Ethereum and ApeChain, shows `name (chain) 0x...` for each and stores the addresses. Otherdeed always brings both of its contracts. Without the OSWiki API only raw `0x` addresses are accepted.
+4. **Confirmation**: every trade waits for your OK in oswiki-sign's own dialog (recommended), or the AI may trade on its own within your limits (`OSWIKI_CONFIRM_MODE=off`, see [Confirmation dialog](#confirmation-dialog)).
+5. **Client**: adds oswiki-sign to Claude Code (`claude mcp add --scope user`), Cursor (`~/.cursor/mcp.json`) or Claude Desktop (`claude_desktop_config.json`), or prints the config. The config holds only the path of the key file and the exact version. For Claude Code it also offers the [hardening](#claude-code-hardening) deny rules.
 
-Every file it changes is backed up first (`<file>.bak-<time>`), other MCP servers and settings are kept, and an existing key file is only replaced if you confirm it (it is then moved to `key.bak-<time>`). Run setup again to change the limits or turn dry run off; it keeps your wallet. `npx -y @oswikixyz/sign@0.1.1 setup --help` shows the details. To do everything by hand instead, see [Manual setup](#manual-setup).
+Every file it changes is backed up first (`<file>.bak-<time>`), other MCP servers and settings are kept, and an existing key file is only replaced if you confirm it (it is then moved to `key.bak-<time>`). Run setup again to change anything; it keeps your wallet. Colors are off with `NO_COLOR` or when the output is not a terminal. `npx -y @oswikixyz/sign@0.1.2 setup --help` shows the steps. To do everything by hand instead, see [Manual setup](#manual-setup).
 
 ## How it works
 
@@ -25,13 +26,23 @@ Every file it changes is backed up first (`<file>.bak-<time>`), other MCP server
 2. You read the preview and tell the AI to go ahead.
 3. The AI calls `execute` with the `confirmId` from that preview. oswiki-sign re-checks the counter, ownership and a simulation, then signs and sends exactly what was previewed. A `confirmId` works once and expires after 10 minutes.
 
-Tools: `wallet_status`, `my_listings`, `my_offers`, `preview_listing`, `preview_buy`, `preview_cancel`, `preview_offer`, `preview_accept_offer`, `execute`.
+Tools: `wallet_status`, `my_listings`, `my_offers`, `preview_listing`, `preview_buy`, `preview_cancel`, `preview_offer`, `preview_accept_offer`, `execute`, `update_limits`.
+
+`wallet_status` lists every setting with its exact env name, current value and source (setup/env or chat), and how to change it.
+
+### Changing limits from the chat
+
+`update_limits` changes the per-buy and daily caps, the floor guard, trades and cancels per day, dry run, the confirmation mode and the collection allow/block lists (`0x` addresses only). Every change, tighter or looser, is shown to you as old -> new in oswiki-sign's own dialog and applies only after you approve it there, in every confirmation mode. It then takes effect at once, no restart. Clients that cannot show the dialog cannot change settings this way; run setup again instead.
+
+Approved changes are saved in `~/.oswiki-sign/settings.json`, signed with a key derived from your wallet key, and win over the setup/env values. A file that fails that check (edited by hand, or from another wallet) is ignored with a warning. Re-running setup shows the chat changes and offers to reset them.
 
 `preview_cancel` takes `askIds` (your OSWiki listings, including their linked OpenSea listings), `bidIds` (your offers) and `orders`: the order components of signed orders the OSWiki API rejected, exactly as an `execute` result printed them, so they can still be cancelled on-chain.
 
 ### Confirmation dialog
 
 When the AI calls `execute`, oswiki-sign itself opens a confirmation dialog in your client showing the exact trade. Only ticking "Sign and send this trade" sends it; the AI cannot answer this dialog. Claude Code shows the dialog automatically. If your client cannot show it, trades are refused unless you set `OSWIKI_CONFIRM_MODE=ai` (less safe: the AI's word then counts as your confirmation).
+
+`OSWIKI_CONFIRM_MODE=off` switches the dialog off on purpose, so the AI can trade on its own: for trades you asked for, or under a standing instruction such as "buy any Gimboz under 2,500 APE". The AI is told it may execute when you asked for the trade or a standing instruction covers it, must stay within the limits and must report every executed trade. Be honest with yourself about what this means: nothing stops a trade except your limits. A manipulated listing name, web page or message that the AI reads could make it trade, up to your per-buy, daily and trade-count limits, in the collections you allow. oswiki-sign says so at startup, in `wallet_status` and under every preview. All other limits stay exactly as you set them. Use it only with a small wallet, tight limits and, ideally, an allowlist.
 
 ### Royalties
 
@@ -40,13 +51,13 @@ When the collection has on-chain ERC-2981 royalty info, the royalty in a preview
 ## Before you start
 
 - **Use a separate trading wallet.** Create a fresh wallet for oswiki-sign and fund it only with what you are willing to trade. Never use your main wallet or one that holds anything you do not plan to trade.
-- **Dry run first.** Start with `OSWIKI_DRY_RUN=1`: previews work, `execute` signs and sends nothing. Try a listing, an offer and a buy, read the previews, then turn dry run off.
+- **Dry run if you like.** With `OSWIKI_DRY_RUN=1` previews work and `execute` signs and sends nothing; the confirmation dialog already stops every trade you do not approve.
 - **Set the limits.** Buys and offers stay off on a chain until its max-buy limit is set.
 - **Keep the hosted OSWiki MCP** (`https://mcp.oswiki.xyz/mcp`) installed as well: it is where the AI looks up collections, floors, listings and sales. oswiki-sign only trades.
 
 ## Manual setup
 
-[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.1.1`), never `latest` or a range, and update only on purpose.
+[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.1.2`), never `latest` or a range, and update only on purpose.
 
 ### 1. Store the key in a file
 
@@ -81,7 +92,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
   "mcpServers": {
     "oswiki-sign": {
       "command": "npx",
-      "args": ["-y", "@oswikixyz/sign@0.1.1"],
+      "args": ["-y", "@oswikixyz/sign@0.1.2"],
       "env": {
         "OSWIKI_WALLET_KEY_FILE": "/Users/you/.oswiki-sign/key",
         "OSWIKI_DRY_RUN": "1",
@@ -93,7 +104,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
 }
 ```
 
-If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.1.1"]`.
+If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.1.2"]`.
 
 Claude Code (user scope, so it is stored in `~/.claude.json` and not in a project):
 
@@ -103,15 +114,15 @@ claude mcp add --scope user oswiki-sign \
   -e OSWIKI_DRY_RUN=1 \
   -e OSWIKI_MAX_BUY_ETH=0.5 \
   -e OSWIKI_MAX_BUY_APE=500 \
-  -- npx -y @oswikixyz/sign@0.1.1
+  -- npx -y @oswikixyz/sign@0.1.2
 ```
 
-On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.1.1`.
+On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.1.2`.
 
 Check the setup from a terminal with the same environment variables set:
 
 ```sh
-npx -y @oswikixyz/sign@0.1.1 status
+npx -y @oswikixyz/sign@0.1.2 status
 ```
 
 When the dry-run previews look right, remove `OSWIKI_DRY_RUN` (or set it to `0`) and restart the client.
@@ -167,16 +178,17 @@ Every release is built and published by the [release workflow](.github/workflows
 |---|---|---|
 | `OSWIKI_WALLET_KEY_FILE` | required | Path to a file holding only the private key of the trading wallet (`0x` + 64 hex). Read once at start; the variable is then removed from the environment. On macOS/Linux keep it at mode 600 (oswiki-sign warns otherwise). |
 | `OSWIKI_WALLET_KEY` | - | Not recommended: the key itself instead of `OSWIKI_WALLET_KEY_FILE` (set only one). It then sits in plain text in your client config and in the process environment. |
-| `OSWIKI_DRY_RUN` | off | `1`: previews work, `execute` signs and sends nothing. Start with this. |
+| `OSWIKI_DRY_RUN` | off | `1`: previews work, `execute` signs and sends nothing. Good for a first try. |
 | `OSWIKI_MAX_BUY_ETH` | required for buys/offers | Most one buy or offer may spend on Ethereum, in ETH. Without it, buying and offers on Ethereum are off (listing and cancelling still work). |
 | `OSWIKI_MAX_BUY_APE` | required for buys/offers | Same on ApeChain, in APE. |
-| `OSWIKI_MIN_LIST_FLOOR_PCT` | 50 | Listings and accepted offers below this % of the collection floor are refused. `0` turns it off. |
+| `OSWIKI_MIN_LIST_FLOOR_PCT` | 50 | Listings and accepted offers below this % of the collection floor are refused. The floor is the collection floor across all marketplaces (for Otherdeed the lower of its two contracts), cross-checked against the cheapest active listing on any marketplace. `0` turns it off. |
 | `OSWIKI_MAX_TRADES_PER_DAY` | 50 | Listed, bought, offered and accepted items per UTC day (every item of a bulk execute counts). Counted in `~/.oswiki-sign/state.json`. |
 | `OSWIKI_ALLOWED_COLLECTIONS` | any | Comma-separated collection addresses; everything else is refused. See [Otherdeed](#otherdeed-has-two-contracts). |
+| `OSWIKI_BLOCKED_COLLECTIONS` | none | Comma-separated collection addresses; listing, buying, offers and accepting offers on them are refused in every confirmation mode. Cancelling always works. With both lists set, a collection must be allowed and not blocked. |
 | `OSWIKI_API_KEY` | none | Your oswiki.xyz API key (Account, Developer) for your own rate limit. |
 | `OSWIKI_RPC_URL_MAINNET` | `https://ethereum-rpc.publicnode.com` | Ethereum RPC (https). |
 | `OSWIKI_RPC_URL_APECHAIN` | `https://rpc.apechain.com/http` | ApeChain RPC (https). |
-| `OSWIKI_CONFIRM_MODE` | `human` | `human`: every `execute` must be approved by you in oswiki-sign's own confirmation dialog; clients without that dialog cannot execute. `ai`: on clients without the dialog, the AI's word counts as your confirmation. Less safe; previews and `wallet_status` say so loudly. |
+| `OSWIKI_CONFIRM_MODE` | `human` | `human`: every `execute` must be approved by you in oswiki-sign's own confirmation dialog; clients without that dialog cannot execute. `ai`: the dialog is still used when the client has it; on clients without it, the AI's word counts as your confirmation. `off`: never a dialog, the AI may trade on its own within your limits (a manipulated text could trigger a trade within them; see [Confirmation dialog](#confirmation-dialog)). `ai` and `off` are announced loudly at startup, in previews and in `wallet_status`. |
 | `OSWIKI_DAILY_MAX_ETH` | 3x `OSWIKI_MAX_BUY_ETH` | Total ETH that buys plus new offers may use per UTC day on Ethereum. |
 | `OSWIKI_DAILY_MAX_APE` | 3x `OSWIKI_MAX_BUY_APE` | Same on ApeChain, in APE. |
 | `OSWIKI_MAX_CANCELS_PER_DAY` | 200 | Cancelled orders per UTC day (each order counts). |
@@ -203,9 +215,10 @@ OSWIKI_ALLOWED_COLLECTIONS=0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258,0x790b2cf2
 - **Separate wallet.** Fund it with what you plan to trade, nothing more.
 - **Key file, not the key.** Use `OSWIKI_WALLET_KEY_FILE` and keep the agent away from `~/.oswiki-sign` and its own config (see [Claude Code hardening](#claude-code-hardening)).
 - **Set the max-buy limits.** Buys and offers stay off on a chain until its `OSWIKI_MAX_BUY_*` is set; pick the most you would ever spend in one trade.
-- **Dry run first.** Try a listing, an offer and a buy with `OSWIKI_DRY_RUN=1` and read the previews before you turn it off.
+- **Dry run to try it out.** Try a listing, an offer and a buy with `OSWIKI_DRY_RUN=1` and read the previews.
 - **Never paste the key into a chat.** oswiki-sign never asks for it, and the AI must not either.
-- **Read every preview.** Nothing happens until you approve the trade in the confirmation dialog.
+- **Read every preview.** Nothing happens until you approve the trade in the confirmation dialog (unless you turned it off).
+- **Confirmation off means the AI trades alone.** With `OSWIKI_CONFIRM_MODE=off` your limits are the only brake: keep the wallet small, the caps tight and an allowlist set.
 - **Pin the exact version.** Never run an unpinned or "latest" oswiki-sign.
 - What oswiki-sign enforces in code, whatever the AI or the API say:
   - only Seaport 1.6 and the OpenSea conduit; fee exactly 1% to the known OSWiki fee recipient of the chain; royalty at most 25%, and at most 10% when it is unverified;
@@ -213,9 +226,11 @@ OSWIKI_ALLOWED_COLLECTIONS=0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258,0x790b2cf2
   - transactions only to Seaport, WETH/WAPE, or `setApprovalForAll` on the collection being traded;
   - the Seaport counter is always read from the chain (never assumed), purchases are re-encoded locally and must match the listing's own hash and exact price, and every transaction is simulated first;
   - prices are explicit numbers: no listing at 0, no guessed floor;
-  - every `execute` needs your confirmation in oswiki-sign's own dialog (unless you chose `OSWIKI_CONFIRM_MODE=ai`);
+  - every `execute` needs your confirmation in oswiki-sign's own dialog (unless you chose `OSWIKI_CONFIRM_MODE=ai` on a client without the dialog, or `off`);
+  - every setting change from the chat needs your approval in that dialog, in every mode;
+  - blocked collections are refused in every mode; the allowlist, if set, too;
   - the limits above, daily value caps per chain, gas limit and fee caps per transaction, and no resend while an earlier transaction may still land;
-  - the daily counters are signed with a key derived from your wallet key, so editing `state.json` cannot raise them.
+  - the daily counters and the chat settings are signed with a key derived from your wallet key, so editing `state.json` cannot raise the counters and an edited `settings.json` is ignored.
 
   The limits are local to your machine: anything that can write files as your user (including an agent with shell access) can reset them by deleting `~/.oswiki-sign/state.json`, or change them in the MCP config. That is why the [Claude Code hardening](#claude-code-hardening) deny rules and the sandbox matter; the per-trade caps (`OSWIKI_MAX_BUY_*`) and the separate wallet are what bound the worst case.
 

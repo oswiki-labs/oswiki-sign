@@ -12,7 +12,7 @@ export class SetupError extends Error {
   }
 }
 
-export type ConfirmMode = 'human' | 'ai';
+export type ConfirmMode = 'human' | 'ai' | 'off';
 
 export interface Config {
   rpc: Record<SupportedChainId, string>;
@@ -24,6 +24,7 @@ export interface Config {
   maxCancelsPerDay: number;
   maxFeePerGasWei: Record<SupportedChainId, bigint>;
   allowedCollections: ReadonlySet<string> | null;
+  blockedCollections: ReadonlySet<string> | null;
   confirmMode: ConfirmMode;
   dryRun: boolean;
   stateDir: string;
@@ -78,18 +79,21 @@ function readConfirmMode(value: string | undefined): ConfirmMode {
   const mode = value?.trim().toLowerCase() ?? '';
   if (mode === '' || mode === 'human') return 'human';
   if (mode === 'ai') return 'ai';
-  throw new SetupError('OSWIKI_CONFIRM_MODE must be "human" (default) or "ai".');
+  if (mode === 'off') return 'off';
+  throw new SetupError('OSWIKI_CONFIRM_MODE must be "human" (default), "ai" or "off".');
+}
+
+function readAddresses(value: string | undefined, name: string): Set<string> | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const entries = trimmed.split(',').map(entry => entry.trim()).filter(Boolean);
+  if (entries.some(entry => !ADDRESS_RE.test(entry))) throw new SetupError(`${name} must be a comma-separated list of 0x collection addresses.`);
+  return new Set(entries.map(entry => entry.toLowerCase()));
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
-  const allowed = env.OSWIKI_ALLOWED_COLLECTIONS?.trim();
-  let allowedCollections: Set<string> | null = null;
-  if (allowed) {
-    const entries = allowed.split(',').map(entry => entry.trim()).filter(Boolean);
-    const bad = entries.filter(entry => !ADDRESS_RE.test(entry));
-    if (bad.length > 0) throw new SetupError('OSWIKI_ALLOWED_COLLECTIONS must be a comma-separated list of 0x collection addresses.');
-    allowedCollections = new Set(entries.map(entry => entry.toLowerCase()));
-  }
+  const allowedCollections = readAddresses(env.OSWIKI_ALLOWED_COLLECTIONS, 'OSWIKI_ALLOWED_COLLECTIONS');
+  const blockedCollections = readAddresses(env.OSWIKI_BLOCKED_COLLECTIONS, 'OSWIKI_BLOCKED_COLLECTIONS');
 
   const dryRunRaw = env.OSWIKI_DRY_RUN?.trim().toLowerCase();
   const apiKey = env.OSWIKI_API_KEY?.trim();
@@ -118,6 +122,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       [APECHAIN_ID]: readGwei(env.OSWIKI_MAX_GWEI_APECHAIN, DEFAULT_MAX_GWEI[APECHAIN_ID], 'OSWIKI_MAX_GWEI_APECHAIN'),
     },
     allowedCollections,
+    blockedCollections,
     confirmMode: readConfirmMode(env.OSWIKI_CONFIRM_MODE),
     dryRun: dryRunRaw === '1' || dryRunRaw === 'true' || dryRunRaw === 'yes',
     stateDir: env.OSWIKI_SIGN_STATE_DIR?.trim() || join(homedir(), '.oswiki-sign'),

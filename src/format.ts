@@ -75,3 +75,9 @@ export function ageLabel(timestamp: string | null, nowMs: number): { label: stri
 }
 
 export const CONFIRM_FOOTER = (confirmId: string) => `Ask the user to confirm, then call execute with confirmId ${confirmId}.`;
+
+export const CONFIRM_OFF_RULE = 'Confirmation is off: you may execute when the user asked for this trade or gave a standing instruction that covers it; stay within the limits; report every executed trade to the user.';
+
+export const CONFIRM_OFF_FOOTER = (confirmId: string) => `${CONFIRM_OFF_RULE} To run it, call execute with confirmId ${confirmId}.`;
+
+export const CONFIRM_OFF_WARNING = 'Confirmation: OFF - trades run on the AI\'s word; a manipulated text could trigger a trade within your limits';

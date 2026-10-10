@@ -265,7 +265,32 @@ describe('M3: floor guard', () => {
     setupListing(h, { floor: 0.1, cheapest: 2 });
     await expect(previewListing(h.ctx, listArgs('0.5'))).rejects.toThrow(/below 50% of the floor \(2 ETH\)/);
     const { text } = await previewListing(h.ctx, listArgs('1.5'));
-    expect(text).toMatch(/WARNING: the API floor \(0\.1 ETH\) and the cheapest active OSWiki listing \(2 ETH\) differ by more than 5x/);
+    expect(text).toMatch(/WARNING: the API floor \(0\.1 ETH\) and the cheapest active listing on any marketplace \(2 ETH\) differ by more than 5x/);
+  });
+
+  it('never lets the OSWiki-only cheapest listing raise the all-marketplace floor', async () => {
+    const h = harness();
+    setupListing(h, { floor: 0.048 });
+    const marketplaces: Array<string | null> = [];
+    h.api.routes.set('GET /v1/listings', (_body, url) => {
+      if (url.searchParams.get('maker')) return [];
+      marketplaces.push(url.searchParams.get('marketplace'));
+      return url.searchParams.get('marketplace') === 'all' ? [] : [{ askId: `oswiki-0x${'ab'.repeat(32)}`, contract: { address: COLLECTION }, tokenId: '9', price: { amount: { decimal: 1 } } }];
+    });
+    const { text } = await previewListing(h.ctx, listArgs('0.0456'));
+    expect(text).toMatch(/floor 0\.048 ETH/);
+    expect(text).not.toMatch(/differ by more than/);
+    await expect(previewListing(h.ctx, listArgs('0.02'))).rejects.toThrow(/below 50% of the floor \(0\.048 ETH\)/);
+    expect(marketplaces.length).toBeGreaterThan(0);
+    expect(marketplaces.every(value => value === 'all')).toBe(true);
+  });
+
+  it('uses the lower floor of Otherdeed and Otherdeed Expanded', async () => {
+    const h = harness();
+    setupListing(h, { floor: 0.5 });
+    h.api.routes.set('GET /v1/collections/0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258', () => ({ address: '0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258', name: 'Otherdeed', slug: 'otherdeed', stats: { floorPrice: 0.3 } }));
+    await expect(previewListing(h.ctx, listArgs('0.2'))).resolves.toBeDefined();
+    await expect(previewListing(h.ctx, listArgs('0.1'))).rejects.toThrow(/below 50% of the floor \(0\.3 ETH\)/);
   });
 
   it('keeps the API floor when both agree', () => {

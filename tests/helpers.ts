@@ -27,7 +27,7 @@ import {
 } from '../src/abi.js';
 import { ApiClient } from '../src/api.js';
 import { createChains } from '../src/chain.js';
-import { loadConfig } from '../src/config.js';
+import { SettingsStore } from '../src/settings.js';
 import { OPENSEA_CONDUIT_ADDRESS, OPENSEA_CONDUIT_KEY, SEAPORT_ADDRESS, WRAPPED_NATIVE, type SupportedChainId } from '../src/constants.js';
 import type { Ctx } from '../src/flows/common.js';
 import { loadWallet } from '../src/secret.js';
@@ -261,6 +261,7 @@ export interface Harness {
   chain: ChainState;
   api: MockApi;
   outputs: string[];
+  settings: SettingsStore;
   call: (name: string, args?: unknown) => Promise<{ text: string; isError: boolean }>;
   setNow: (ms: number) => void;
 }
@@ -274,7 +275,8 @@ export function harness(options: { env?: Record<string, string>; logsFor?: LogsF
     ...options.env,
   };
   const wallet = loadWallet(env);
-  const config = loadConfig(env);
+  const settings = SettingsStore.fromEnv(env, wallet.stateKey);
+  const config = settings.load();
   const chain = newChainState();
   const api = mockApi();
   let now = options.now ?? Date.parse('2026-10-10T12:00:00Z');
@@ -287,7 +289,7 @@ export function harness(options: { env?: Record<string, string>; logsFor?: LogsF
     state: new TradeState(config.stateDir, config.maxTradesPerDay, () => now),
     now: () => now,
   };
-  const handler = createToolHandler(ctx, wallet.scrub, { confirmer: { available: () => true, ask: async () => 'confirmed' } });
+  const handler = createToolHandler(ctx, wallet.scrub, { confirmer: { available: () => true, ask: async () => 'confirmed' }, settings });
   const outputs: string[] = [];
   return {
     handler,
@@ -295,6 +297,7 @@ export function harness(options: { env?: Record<string, string>; logsFor?: LogsF
     chain,
     api,
     outputs,
+    settings,
     setNow: (ms) => {
       now = ms;
     },

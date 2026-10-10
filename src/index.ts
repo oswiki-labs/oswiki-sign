@@ -3,10 +3,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { ApiClient } from './api.js';
 import { createChains } from './chain.js';
-import { loadConfig, SetupError } from './config.js';
+import { SetupError } from './config.js';
 import { walletStatus } from './flows/status.js';
 import { loadWallet } from './secret.js';
 import { createSignServer, createToolHandler } from './server.js';
+import { SettingsStore } from './settings.js';
 import { defaultSetupDeps, runSetup } from './setup.js';
 import { TradeState } from './state.js';
 import { VERSION } from './version.js';
@@ -22,8 +23,9 @@ Usage:
 Environment: OSWIKI_WALLET_KEY_FILE or OSWIKI_WALLET_KEY (one required), OSWIKI_API_KEY, OSWIKI_RPC_URL_MAINNET,
 OSWIKI_RPC_URL_APECHAIN, OSWIKI_MAX_BUY_ETH, OSWIKI_MAX_BUY_APE, OSWIKI_DAILY_MAX_ETH, OSWIKI_DAILY_MAX_APE,
 OSWIKI_MIN_LIST_FLOOR_PCT (50), OSWIKI_MAX_TRADES_PER_DAY (50), OSWIKI_MAX_CANCELS_PER_DAY (200),
-OSWIKI_MAX_GWEI (200), OSWIKI_MAX_GWEI_APECHAIN (1000), OSWIKI_ALLOWED_COLLECTIONS, OSWIKI_CONFIRM_MODE (human),
-OSWIKI_DRY_RUN=1. See the README.`;
+OSWIKI_MAX_GWEI (200), OSWIKI_MAX_GWEI_APECHAIN (1000), OSWIKI_ALLOWED_COLLECTIONS, OSWIKI_BLOCKED_COLLECTIONS,
+OSWIKI_CONFIRM_MODE (human|ai|off), OSWIKI_DRY_RUN=1. Limits changed from the chat (update_limits) are kept in
+~/.oswiki-sign/settings.json and override these. See the README.`;
 
 async function main(): Promise<void> {
   const arg = process.argv[2];
@@ -47,9 +49,11 @@ async function main(): Promise<void> {
 
   let wallet;
   let config;
+  let settings;
   try {
     wallet = loadWallet(process.env);
-    config = loadConfig(process.env);
+    settings = SettingsStore.fromEnv(process.env, wallet.stateKey);
+    config = settings.load();
   } catch (err) {
     process.stderr.write(`${err instanceof SetupError ? err.message : 'oswiki-sign could not start.'}\n`);
     process.exitCode = 1;
@@ -57,6 +61,8 @@ async function main(): Promise<void> {
   }
 
   for (const warning of wallet.warnings) process.stderr.write(`${warning}\n`);
+  if (settings.warning) process.stderr.write(`${settings.warning}\n`);
+  if (config.confirmMode === 'off') process.stderr.write('WARNING: OSWIKI_CONFIRM_MODE=off - oswiki-sign shows no confirmation dialog; trades run on the AI\'s word, and a manipulated text could trigger a trade within your limits.\n');
   if (config.confirmMode === 'ai') process.stderr.write('WARNING: OSWIKI_CONFIRM_MODE=ai - without a client confirmation dialog, execute runs on the AI\'s word alone.\n');
 
   const state = new TradeState(config.stateDir, config.maxTradesPerDay, Date.now, { macKey: wallet.stateKey });
@@ -70,11 +76,11 @@ async function main(): Promise<void> {
   };
 
   if (arg === 'status') {
-    process.stdout.write(`${wallet.scrub(await walletStatus(ctx))}\n`);
+    process.stdout.write(`${wallet.scrub(await walletStatus(ctx, { overrides: settings.overrides, settingsWarning: settings.warning }))}\n`);
     return;
   }
 
-  const server = createSignServer(createToolHandler(ctx, wallet.scrub));
+  const server = createSignServer(createToolHandler(ctx, wallet.scrub, { settings }));
   await server.connect(new StdioServerTransport());
   process.stderr.write(`oswiki-sign ${VERSION} ready for ${wallet.account.address}${config.dryRun ? ' (dry run)' : ''}\n`);
 }

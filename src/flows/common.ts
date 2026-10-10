@@ -70,6 +70,9 @@ export function assertCollectionAllowed(config: Config, contract: string): void 
   if (config.allowedCollections && !config.allowedCollections.has(contract.toLowerCase())) {
     throw new GuardError(`Collection ${contract.toLowerCase()} is not in OSWIKI_ALLOWED_COLLECTIONS. Nothing was signed or sent.`);
   }
+  if (config.blockedCollections?.has(contract.toLowerCase())) {
+    throw new GuardError(`Collection ${contract.toLowerCase()} is blocked (OSWIKI_BLOCKED_COLLECTIONS). Nothing was signed or sent.`);
+  }
 }
 
 /** Buys and offers stay off on a chain until its per-trade limit is configured. */

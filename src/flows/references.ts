@@ -1,5 +1,5 @@
 import type { CollectionInfo, SaleReference, TokenReference } from '../api.js';
-import { MAINNET_ID, NATIVE_SYMBOL, WRAPPED_SYMBOL, type SupportedChainId } from '../constants.js';
+import { MAINNET_ID, NATIVE_SYMBOL, OTHERDEED_CONTRACTS, WRAPPED_SYMBOL, type SupportedChainId } from '../constants.js';
 import { ageLabel, native, trimAmount } from '../format.js';
 import type { Ctx } from './common.js';
 import { floorToWei } from './common.js';
@@ -8,7 +8,7 @@ export const REFERENCE_MAX_AGE_DAYS = 90;
 export const WARN_BELOW_PCT = 70;
 export const FLOOR_DISAGREE_FACTOR = 5n;
 
-const OTHERDEED_CONTRACTS = new Set(['0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258', '0x790b2cf29ed4f310bf7641f013c65d4560d28371']);
+const OTHERDEED = new Set(OTHERDEED_CONTRACTS);
 const OTHERDEED_KEY_TRAITS = ['Environment', 'Sediment'];
 
 export interface TraitSales {
@@ -22,27 +22,33 @@ export interface FloorReference {
   warning: string | null;
 }
 
-/** The API floor, cross-checked against the cheapest active OSWiki listing; on a >5x split the higher one counts. */
+/** The all-marketplace collection floor, cross-checked against the cheapest active listing on any marketplace; on a >5x split the higher one counts. */
 export function resolveFloor(info: CollectionInfo | null, cheapestListing: number | null, chainId: SupportedChainId): FloorReference {
   const apiWei = info ? floorToWei(info.floorPrice) : null;
   const listingWei = floorToWei(cheapestListing);
   if (apiWei !== null && listingWei !== null) {
     const [low, high] = apiWei < listingWei ? [apiWei, listingWei] : [listingWei, apiWei];
     if (high > low * FLOOR_DISAGREE_FACTOR) {
-      return { wei: high, unavailable: false, warning: `WARNING: the API floor (${native(apiWei, chainId)}) and the cheapest active OSWiki listing (${native(listingWei, chainId)}) differ by more than ${FLOOR_DISAGREE_FACTOR}x; the floor check uses the higher, ${native(high, chainId)}.` };
+      return { wei: high, unavailable: false, warning: `WARNING: the API floor (${native(apiWei, chainId)}) and the cheapest active listing on any marketplace (${native(listingWei, chainId)}) differ by more than ${FLOOR_DISAGREE_FACTOR}x; the floor check uses the higher, ${native(high, chainId)}.` };
     }
     return { wei: apiWei, unavailable: false, warning: null };
   }
   if (apiWei === null && listingWei !== null) {
-    return { wei: listingWei, unavailable: info === null, warning: `WARNING: the API reports no floor, but OSWiki has an active listing at ${native(listingWei, chainId)}; the floor check uses it.` };
+    return { wei: listingWei, unavailable: info === null, warning: `WARNING: the API reports no floor, but there is an active listing at ${native(listingWei, chainId)}; the floor check uses it.` };
   }
   return { wei: apiWei, unavailable: info === null, warning: null };
 }
 
+/** Otherdeed and Otherdeed Expanded share one floor: the lower of the two contracts. */
 export async function fetchFloor(ctx: Ctx, chainId: SupportedChainId, contract: string): Promise<{ info: CollectionInfo | null; floor: FloorReference }> {
-  const info = await ctx.api.collection(chainId, contract).catch(() => null);
-  const cheapest = info?.slug ? await ctx.api.cheapestListing(chainId, info.slug, contract).catch(() => null) : null;
-  return { info, floor: resolveFloor(info, cheapest, chainId) };
+  const own = contract.toLowerCase();
+  const contracts = chainId === MAINNET_ID && OTHERDEED.has(own) ? [own, ...OTHERDEED_CONTRACTS.filter(address => address !== own)] : [own];
+  const infos = await Promise.all(contracts.map(address => ctx.api.collection(chainId, address).catch(() => null)));
+  const info = infos[0] ?? null;
+  const cheapest = await Promise.all(infos.map((entry, i) => (entry?.slug ? ctx.api.cheapestListing(chainId, entry.slug, contracts[i]!).catch(() => null) : null)));
+  const lowest = (values: Array<number | null | undefined>) => values.reduce<number | null>((min, value) => (typeof value === 'number' && value > 0 && (min === null || value < min) ? value : min), null);
+  const combined = info ? { ...info, floorPrice: lowest(infos.map(entry => entry?.floorPrice)) } : null;
+  return { info, floor: resolveFloor(combined, lowest(cheapest), chainId) };
 }
 
 export interface CollectionReferences {
@@ -57,7 +63,7 @@ export interface CollectionReferences {
  * token responses carry no per-trait supply, so other collections get no trait reference.
  */
 export function keyTraits(chainId: SupportedChainId, contract: string, token: TokenReference | undefined): Record<string, string> | null {
-  if (chainId !== MAINNET_ID || !OTHERDEED_CONTRACTS.has(contract.toLowerCase()) || !token) return null;
+  if (chainId !== MAINNET_ID || !OTHERDEED.has(contract.toLowerCase()) || !token) return null;
   const traits: Record<string, string> = {};
   for (const type of OTHERDEED_KEY_TRAITS) {
     const value = token.attributes.find(attribute => attribute.traitType === type)?.value;

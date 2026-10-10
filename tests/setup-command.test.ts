@@ -14,13 +14,19 @@ import {
   createTerminalPrompter,
   DENY_RULES,
   keyFilePath,
+  NEVER_PASTE,
+  box,
+  useColor,
   runSetup,
   type Exec,
   type SetupDeps,
 } from '../src/setup.js';
+import type { FetchLike } from '../src/api.js';
+import { loadWallet } from '../src/secret.js';
+import { settingsFile, settingsMacKey, writeOverrides } from '../src/settings.js';
 import { TEST_KEY } from './helpers.js';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const PKG = `@oswikixyz/sign@${VERSION}`;
 const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA };
 let root: string;
@@ -50,7 +56,7 @@ interface Harness {
   keys: Hex[];
 }
 
-function harness(answers: string[], options: { secrets?: string[]; platform?: NodeJS.Platform; path?: string; isTTY?: boolean } = {}): Harness {
+function harness(answers: string[], options: { secrets?: string[]; platform?: NodeJS.Platform; path?: string; isTTY?: boolean; color?: boolean; fetch?: FetchLike } = {}): Harness {
   const lines: string[] = [];
   const questions: string[] = [];
   const keys: Hex[] = [];
@@ -75,6 +81,8 @@ function harness(answers: string[], options: { secrets?: string[]; platform?: No
       },
     },
     isTTY: options.isTTY ?? true,
+    color: options.color ?? false,
+    fetch: options.fetch ?? (async () => { throw new Error('offline'); }),
     platform: options.platform ?? process.platform,
     env: { PATH: options.path ?? join(root, 'empty-bin'), USERNAME: 'tester', SystemRoot: 'C:\\Windows', APPDATA: process.env.APPDATA },
     home: homedir(),
@@ -102,7 +110,7 @@ function homeFile(...parts: string[]): string {
 
 describe('setup: create wallet', () => {
   it('writes the key file with owner-only access, prints only the address and pins the version', async () => {
-    const h = harness(['', '', '', '', '', '', '', '4']);
+    const h = harness(['', '', '', '', '', '', '', '', '', '4']);
     expect(await runSetup([], h.deps)).toBe(0);
 
     const key = h.keys[0]!;
@@ -119,19 +127,38 @@ describe('setup: create wallet', () => {
     const out = h.output();
     expectNoKey(out, key);
     const address = privateKeyToAccount(key).address;
-    expect(out).toContain(`Your new trading wallet: ${address}`);
-    expect(out).toContain('Send the NFTs you want to trade and a little ETH (Ethereum) / APE (ApeChain) for gas to this address');
+    expect(out).toContain('Your new trading wallet');
+    expect(out).toContain(`| ${address}`);
+    expect(out).toContain(`Key saved to ${keyFile} (only you can read it)`);
+    expect(out).toContain(NEVER_PASTE);
+    expect(out).not.toContain('\u001b[');
     expect(out).toContain(`"${PKG}"`);
     expect(out).toContain(JSON.stringify(keyFile));
-    expect(out).toContain('"OSWIKI_DRY_RUN": "1"');
+    expect(out).toContain('"OSWIKI_DRY_RUN": "0"');
     expect(out).toContain('"OSWIKI_MAX_BUY_ETH": "0.05"');
     expect(out).toContain('"OSWIKI_MAX_BUY_APE": "50"');
-    expect(h.questions.some(q => q.startsWith('Show the private key once') && q.endsWith('(y/N) '))).toBe(true);
-    expect(h.questions.some(q => q.startsWith('Turn dry run on?') && q.endsWith('(Y/n) '))).toBe(true);
+    expect(h.questions).toContain('Back up the private key now? (y/N) - if you lose the key file, the wallet is gone ');
+    expect(h.questions).toContain('Dry run (nothing is sent)? (y/N) ');
+    expect(h.questions).toContain('1) Any  2) Only these  3) Any except these [1]: ');
+    expect(h.questions).toContain('Let the AI trade without asking you? (y/N) ');
+    expect(h.questions).toContain('1) Claude Code  2) Cursor  3) Claude Desktop  4) Print config [1]: ');
+    for (const question of h.questions) expect(question.length, question).toBeLessThanOrEqual(90);
+    expect(out).toContain('No = you approve each trade in a dialog (recommended)');
+    expect(out).toContain('"OSWIKI_CONFIRM_MODE": "human"');
+    expect(out).toMatch(/Done\. Wallet 0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{4} · dry run off · dialog on · any collection/);
+    expect(out).toContain('Never paste the private key into a chat.');
+  });
+
+  it('writes OSWIKI_CONFIRM_MODE=off only when the user lets the AI trade on its own', async () => {
+    const h = harness(['', '', '', '', '', '', 'n', '', 'yes', '4']);
+    expect(await runSetup([], h.deps)).toBe(0);
+    const out = h.output();
+    expect(out).toContain('"OSWIKI_CONFIRM_MODE": "off"');
+    expect(out).toContain('confirmation OFF - AI trades on its own within your limits');
   });
 
   it('shows a new key only on explicit opt-in, once', async () => {
-    const h = harness(['1', 'y', '', 'skip', 'skip', '0', '10', 'n', '4']);
+    const h = harness(['1', 'y', '', 'skip', 'skip', '0', '10', 'n', '', 'y', '4']);
     expect(await runSetup([], h.deps)).toBe(0);
     const out = h.output();
     expect(out.split(h.keys[0]!).length - 1).toBe(1);
@@ -139,10 +166,11 @@ describe('setup: create wallet', () => {
     expect(out).not.toContain('OSWIKI_MAX_BUY_APE');
     expect(out).toContain('"OSWIKI_DRY_RUN": "0"');
     expect(out).toContain('"OSWIKI_MIN_LIST_FLOOR_PCT": "0"');
+    expect(out).toContain('"OSWIKI_CONFIRM_MODE": "off"');
   });
 
   it('re-asks invalid limits', async () => {
-    const h = harness(['', '', '-1', '1e3', '0', '0.25', '', '150', '', '', '', '4']);
+    const h = harness(['', '', '-1', '1e3', '0', '0.25', '', '150', '', '', '', '', '', '4']);
     expect(await runSetup([], h.deps)).toBe(0);
     expect(h.output()).toContain('"OSWIKI_MAX_BUY_ETH": "0.25"');
     expect(h.output()).toContain('Please enter a whole number from 0 to 100.');
@@ -153,13 +181,15 @@ describe('setup: import', () => {
   it('validates the key at a hidden prompt and never echoes it', async () => {
     const bad = 'abandon ability able about above absent absorb abstract absurd abuse access accident';
     const shortHex = 'ab'.repeat(31);
-    const h = harness(['2', '', '', '', '', '', '', '4'], { secrets: [bad, shortHex, TEST_KEY.slice(2).toUpperCase()] });
+    const h = harness(['2', '', '', '', '', '', '', '', '', '4'], { secrets: [bad, shortHex, TEST_KEY.slice(2).toUpperCase()] });
     expect(await runSetup([], h.deps)).toBe(0);
     const out = h.output();
     expectNoKey(out, TEST_KEY);
     expect(out).not.toContain(bad);
     expect(out).not.toContain(shortHex);
-    expect(out).toContain(`This key belongs to ${privateKeyToAccount(TEST_KEY).address}.`);
+    expect(out).toContain('This key belongs to');
+    expect(out).toContain(privateKeyToAccount(TEST_KEY).address);
+    expect(out).toContain(`Key saved to ${keyFilePath(homedir())} (only you can read it).`);
     expect(readFileSync(keyFilePath(homedir()), 'utf8')).toBe(`${TEST_KEY.toLowerCase()}\n`);
     expect(h.keys).toEqual([]);
   });
@@ -191,13 +221,13 @@ describe('setup: existing key file', () => {
     expect(await runSetup([], h.deps)).toBe(1);
     expect(readFileSync(keyFile, 'utf8')).toBe(`${TEST_KEY}\n`);
     expect(readdirSync(join(homedir(), '.oswiki-sign'))).toEqual(['key']);
-    expect(h.questions.find(q => q.startsWith('Replace the existing key file?'))).toMatch(/\(y\/N\) $/);
+    expect(h.questions.find(q => q.startsWith('Replace the key file?'))).toMatch(/\(y\/N\) - /);
     expectNoKey(h.output(), TEST_KEY);
   });
 
   it('keeps the existing wallet by default', async () => {
     const keyFile = seedKey();
-    const h = harness(['', '', '', '', '', '', '4']);
+    const h = harness(['', '', '', '', '', '', '', '', '4']);
     expect(await runSetup([], h.deps)).toBe(0);
     expect(readFileSync(keyFile, 'utf8')).toBe(`${TEST_KEY}\n`);
     expect(h.output()).toContain(privateKeyToAccount(TEST_KEY).address);
@@ -206,7 +236,7 @@ describe('setup: existing key file', () => {
 
   it('backs the old key up with the same permissions when replacing', async () => {
     const keyFile = seedKey();
-    const h = harness(['n', 'y', '1', '', '', '', '', '', '', '4']);
+    const h = harness(['n', 'y', '1', '', '', '', '', '', '', '', '', '4']);
     expect(await runSetup([], h.deps)).toBe(0);
     const backup = `${keyFile}.bak-2026-10-11T12-00-00-000Z`;
     expect(readFileSync(backup, 'utf8')).toBe(`${TEST_KEY}\n`);
@@ -222,7 +252,7 @@ describe('setup: client configs', () => {
     mkdirSync(join(homedir(), '.cursor'));
     const original = JSON.stringify({ theme: 'x', mcpServers: { other: { command: 'other' }, 'oswiki-sign': { command: 'old' } } });
     writeFileSync(path, original);
-    const h = harness(['', '', '', '', '', '', '', '2', '']);
+    const h = harness(['', '', '', '', '', '', '', '', '', '2', '']);
     expect(await runSetup([], h.deps)).toBe(0);
 
     expect(readFileSync(`${path}.bak-2026-10-11T12-00-00-000Z`, 'utf8')).toBe(original);
@@ -236,23 +266,24 @@ describe('setup: client configs', () => {
       args: ['-y', PKG],
       env: {
         OSWIKI_WALLET_KEY_FILE: keyFilePath(homedir()),
-        OSWIKI_DRY_RUN: '1',
+        OSWIKI_DRY_RUN: '0',
         OSWIKI_MAX_BUY_ETH: '0.05',
         OSWIKI_MAX_BUY_APE: '50',
         OSWIKI_MIN_LIST_FLOOR_PCT: '50',
         OSWIKI_MAX_TRADES_PER_DAY: '50',
+        OSWIKI_CONFIRM_MODE: 'human',
       },
     });
   });
 
   it('creates the Claude Desktop config when missing and refuses to touch invalid JSON', async () => {
     const path = claudeDesktopConfigPath(process.platform, homedir(), process.env);
-    const h = harness(['', '', '', '', '', '', '', '3', '']);
+    const h = harness(['', '', '', '', '', '', '', '', '', '3', '']);
     expect(await runSetup([], h.deps)).toBe(0);
     expect(Object.keys((JSON.parse(readFileSync(path, 'utf8')) as { mcpServers: object }).mcpServers)).toEqual(['oswiki-sign']);
 
     writeFileSync(path, '{ "mcpServers": { secret-token-123 ');
-    const again = harness(['', '', '', '', '', '', '3']);
+    const again = harness(['', '', '', '', '', '', '', '', '3']);
     expect(await runSetup([], again.deps)).toBe(1);
     expect(again.output()).toContain('is not valid JSON');
     expect(again.output()).not.toContain('secret-token-123');
@@ -283,7 +314,7 @@ describe('setup: Claude Code', () => {
     const originalSettings = JSON.stringify({ model: 'x', permissions: { allow: ['Bash(ls)'], deny: ['Read(./.env)', DENY_RULES[0]] } });
     writeFileSync(settingsPath, originalSettings);
 
-    const h = harness(['', '', '0.5', '500', '', '', '', '1', '', ''], { path: bin });
+    const h = harness(['', '', '0.5', '500', '', '', '', '', '', '1', '', ''], { path: bin });
     expect(await runSetup([], h.deps)).toBe(0);
 
     const keyFile = keyFilePath(homedir());
@@ -291,11 +322,12 @@ describe('setup: Claude Code', () => {
     const expectedAdd = [
       'mcp', 'add', '--scope', 'user', 'oswiki-sign',
       '-e', `OSWIKI_WALLET_KEY_FILE=${keyFile}`,
-      '-e', 'OSWIKI_DRY_RUN=1',
+      '-e', 'OSWIKI_DRY_RUN=0',
       '-e', 'OSWIKI_MAX_BUY_ETH=0.5',
       '-e', 'OSWIKI_MAX_BUY_APE=500',
       '-e', 'OSWIKI_MIN_LIST_FLOOR_PCT=50',
       '-e', 'OSWIKI_MAX_TRADES_PER_DAY=50',
+      '-e', 'OSWIKI_CONFIRM_MODE=human',
       '--', ...launcher, '-y', PKG,
     ];
     const calls = h.exec.mock.calls.filter(([file]) => file === claude);
@@ -314,10 +346,10 @@ describe('setup: Claude Code', () => {
   });
 
   it('prints the exact command when claude is not installed', async () => {
-    const h = harness(['', '', '', '', '', '', '', '1', 'n']);
+    const h = harness(['', '', '', '', '', '', '', '', '', '1', 'n']);
     expect(await runSetup([], h.deps)).toBe(0);
     expect(h.exec.mock.calls.filter(([file]) => !file.endsWith('icacls.exe'))).toEqual([]);
-    expect(h.output()).toContain('The claude command was not found. Run this yourself:');
+    expect(h.output()).toContain('claude not found. Run this yourself:');
     expect(h.output()).toContain(`claude mcp add --scope user oswiki-sign -e`);
     expect(h.output()).toContain(PKG);
     expect(existsSync(homeFile('.claude', 'settings.json'))).toBe(false);
@@ -339,6 +371,91 @@ describe('setup: Claude Code', () => {
     expect(claudeInvocation('C:\\npm\\claude.cmd', ['A=C:\\Users\\%PATH%\\key'], env)).toBeNull();
     expect(claudeInvocation('C:\\npm\\claude.cmd', ['A="x" & calc'], env)).toBeNull();
     expect(claudeInvocation('/usr/bin/claude', ['mcp'], env)).toEqual({ file: '/usr/bin/claude', args: ['mcp'], verbatim: false });
+  });
+});
+
+describe('setup: colors', () => {
+  it('uses colors only on a TTY without NO_COLOR', () => {
+    expect(useColor({}, true)).toBe(true);
+    expect(useColor({ NO_COLOR: '1' }, true)).toBe(false);
+    expect(useColor({}, false)).toBe(false);
+    expect(useColor({ TERM: 'dumb' }, true)).toBe(false);
+    expect(box(['a', 'bc'], false)).toBe('+----+\n| a  |\n| bc |\n+----+');
+    expect(box(['a'], true)).toContain('┌');
+  });
+
+  it('highlights the wallet block in color and still never prints the key without a yes', async () => {
+    const h = harness(['', '', '', '', '', '', '', '', '', '4'], { color: true });
+    expect(await runSetup([], h.deps)).toBe(0);
+    const out = h.output();
+    expect(out).toContain('\u001b[1;31mNever paste this key into a chat.');
+    expect(out).toContain('│');
+    expectNoKey(out, h.keys[0]!);
+  });
+});
+
+describe('setup: collections', () => {
+  const OTHERDEED = '0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258';
+  const EXPANDED = '0x790b2cf29ed4f310bf7641f013c65d4560d28371';
+  const BLOCKED = '0x1111111111111111111111111111111111111111';
+  const api: FetchLike = async (input) => {
+    const url = new URL(input);
+    const id = url.pathname.split('/').pop();
+    const chainId = url.searchParams.get('chainId');
+    const rows: Record<string, { address: string; name: string }> = chainId === '1'
+      ? { otherdeed: { address: OTHERDEED, name: 'Otherdeed' }, [EXPANDED]: { address: EXPANDED, name: 'Otherdeed Expanded' }, [OTHERDEED]: { address: OTHERDEED, name: 'Otherdeed' }, [BLOCKED]: { address: BLOCKED, name: 'Copycat' } }
+      : { [BLOCKED]: { address: BLOCKED, name: 'Copycat Ape' } };
+    const row = id ? rows[id] : undefined;
+    return row ? new Response(JSON.stringify({ success: true, data: row })) : new Response(JSON.stringify({ success: false, error: 'Collection not found' }), { status: 404 });
+  };
+
+  it('resolves slugs on both chains, adds the second Otherdeed contract and re-asks unknown entries', async () => {
+    const h = harness(['', '', '', '', '', '', '', '2', 'otherdeed, nope', 'otherdeed', '', '', '4'], { fetch: api });
+    expect(await runSetup([], h.deps)).toBe(0);
+    const out = h.output();
+    expect(out).toContain('Not found: nope');
+    expect(out).toContain(`  Otherdeed (Ethereum) ${OTHERDEED}`);
+    expect(out).toContain(`  Otherdeed Expanded (Ethereum) ${EXPANDED}`);
+    expect(out).toContain(`"OSWIKI_ALLOWED_COLLECTIONS": "${OTHERDEED},${EXPANDED}"`);
+    expect(out).toContain('only 2 collections');
+  });
+
+  it('writes a blocklist and shows a collection found on both chains', async () => {
+    const h = harness(['', '', '', '', '', '', '', '3', BLOCKED, '', '', '4'], { fetch: api });
+    expect(await runSetup([], h.deps)).toBe(0);
+    const out = h.output();
+    expect(out).toContain(`  Copycat (Ethereum) ${BLOCKED}`);
+    expect(out).toContain(`  Copycat Ape (ApeChain) ${BLOCKED}`);
+    expect(out).toContain(`"OSWIKI_BLOCKED_COLLECTIONS": "${BLOCKED}"`);
+    expect(out).not.toContain('OSWIKI_ALLOWED_COLLECTIONS');
+  });
+
+  it('offline: takes raw 0x addresses only', async () => {
+    const h = harness(['', '', '', '', '', '', '', '2', 'otherdeed', BLOCKED.toUpperCase().replace('0X', '0x'), '', '', '4']);
+    expect(await runSetup([], h.deps)).toBe(0);
+    const out = h.output();
+    expect(out).toContain('OSWiki API unreachable: enter 0x addresses instead.');
+    expect(out).toContain('OSWiki API unreachable: using the addresses as typed.');
+    expect(out).toContain(`"OSWIKI_ALLOWED_COLLECTIONS": "${BLOCKED}"`);
+  });
+});
+
+describe('setup: chat changes', () => {
+  it('shows the update_limits overrides and resets them on request', async () => {
+    const keyFile = keyFilePath(homedir());
+    mkdirSync(join(homedir(), '.oswiki-sign'), { recursive: true });
+    writeFileSync(keyFile, `${TEST_KEY}\n`, { mode: 0o600 });
+    const stateDir = join(homedir(), '.oswiki-sign');
+    writeOverrides(stateDir, settingsMacKey(loadWallet({ OSWIKI_WALLET_KEY_FILE: keyFile }).stateKey), { OSWIKI_MAX_BUY_ETH: '2' });
+    const keep = harness(['', '', '', '', '', '', '', '', '', '4']);
+    expect(await runSetup([], keep.deps)).toBe(0);
+    expect(keep.output()).toContain('Changed from the chat (these win over setup): OSWIKI_MAX_BUY_ETH=2');
+    expect(keep.output()).toContain('Chat changes kept, they win: OSWIKI_MAX_BUY_ETH');
+    expect(existsSync(settingsFile(stateDir))).toBe(true);
+    const reset = harness(['', 'n', '', '', '', '', '', '', '', '4']);
+    expect(await runSetup([], reset.deps)).toBe(0);
+    expect(reset.output()).toContain('Chat changes cleared.');
+    expect(existsSync(settingsFile(stateDir))).toBe(false);
   });
 });
 
