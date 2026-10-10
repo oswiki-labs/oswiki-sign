@@ -7,6 +7,7 @@ import { loadConfig, SetupError } from './config.js';
 import { walletStatus } from './flows/status.js';
 import { loadWallet } from './secret.js';
 import { createSignServer, createToolHandler } from './server.js';
+import { defaultSetupDeps, runSetup } from './setup.js';
 import { TradeState } from './state.js';
 import { VERSION } from './version.js';
 
@@ -14,6 +15,7 @@ const HELP = `oswiki-sign ${VERSION} - local OSWiki trading signer (MCP server o
 
 Usage:
   oswiki-sign            start the MCP server (configure it in Claude Desktop, Cursor or Claude Code)
+  oswiki-sign setup      interactive setup: wallet, limits, AI client (see oswiki-sign setup --help)
   oswiki-sign status     print the wallet, balances and limits, then exit
   oswiki-sign --version
 
@@ -31,6 +33,10 @@ async function main(): Promise<void> {
   }
   if (arg === '--help' || arg === '-h') {
     process.stdout.write(`${HELP}\n`);
+    return;
+  }
+  if (arg === 'setup') {
+    process.exitCode = await runSetup(process.argv.slice(3), defaultSetupDeps(VERSION));
     return;
   }
   if (arg !== undefined && arg !== 'status') {

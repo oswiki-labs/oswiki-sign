@@ -1,6 +1,6 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -40,6 +40,16 @@ describe('bundled dist/index.js without node_modules', () => {
     const run = spawnSync(process.execPath, [entry, '--version'], { cwd: installDir, env: isolatedEnv(), encoding: 'utf8' });
     expect(run.status).toBe(0);
     expect(run.stdout.trim()).toBe(version);
+  });
+
+  it('prints the setup help and refuses setup without a terminal', () => {
+    const help = spawnSync(process.execPath, [entry, 'setup', '--help'], { cwd: installDir, env: isolatedEnv(), encoding: 'utf8' });
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('oswiki-sign setup');
+    const run = spawnSync(process.execPath, [entry, 'setup'], { cwd: installDir, env: isolatedEnv(), encoding: 'utf8', input: '' });
+    expect(run.status).toBe(1);
+    expect(run.stdout).toContain('needs a terminal');
+    expect(readdirSync(home)).toEqual([]);
   });
 
   it('exits with the setup message when no key is configured', () => {
