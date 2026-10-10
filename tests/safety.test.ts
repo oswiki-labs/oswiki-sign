@@ -1,0 +1,474 @@
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { custom, encodeFunctionData, type Hex } from 'viem';
+import { mainnet } from 'viem/chains';
+import { describe, expect, it } from 'vitest';
+
+import { NFT_ABI, WRAPPED_NATIVE_ABI } from '../src/abi.js';
+import { assertAllowedTx, assertNoPendingTx, createChains, gasLimitCap, networkFee, PendingTxError, sendGuardedTx, TxRefusedError, type PendingTracker } from '../src/chain.js';
+import { loadConfig } from '../src/config.js';
+import { OPENSEA_CONDUIT_ADDRESS, SEAPORT_ADDRESS, WRAPPED_NATIVE } from '../src/constants.js';
+import { hashOrderComponents } from '../src/seaport/sign.js';
+import { buildListingOrder, serializeOrderComponents } from '../src/seaport/order.js';
+import { loadWallet } from '../src/secret.js';
+import { chargeOf, createSignServer, createToolHandler, elicitationConfirmer, NO_HUMAN_CONFIRMER, type HumanConfirmer } from '../src/server.js';
+import { LOCK_STALE_MS, StateLockError, TradeState, type PendingTx } from '../src/state.js';
+import vectors from './fixtures/seaport-vectors.json' with { type: 'json' };
+import { cancelLogs, COLLECTION, confirmIdOf, ETH, fulfilledLog, harness, MAINNET_FEE_RECIPIENT, makeTransport, newChainState, OTHER_SELLER, TEST_ADDRESS, TEST_KEY, type Harness } from './helpers.js';
+
+const NOW = Date.parse('2026-10-10T12:00:00Z');
+const vectorAskId = `oswiki-${vectors.orders.erc721.orderHash}`;
+const vectorHash = vectors.orders.erc721.orderHash as Hex;
+
+function setupBuy(h: Harness) {
+  h.api.routes.set(`POST /v1/listings/${vectorAskId}/buy-data`, () => ({
+    askId: vectorAskId,
+    to: SEAPORT_ADDRESS,
+    value: ETH.toString(),
+    orderData: { parameters: vectors.orders.erc721.parameters, signature: vectors.orders.erc721.signature, numerator: 1, denominator: 1, extraData: '0x' },
+  }));
+  h.api.routes.set(`GET /v1/listings/${vectorAskId}`, () => ({ contract: { address: COLLECTION }, tokenId: '1', maker: OTHER_SELLER, status: 'active' }));
+}
+
+function ownListing(tokenId: string) {
+  const order = buildListingOrder({ offerer: TEST_ADDRESS, token: COLLECTION, tokenId, isErc1155: false, unitPriceWei: ETH, feeBps: 100, feeRecipient: MAINNET_FEE_RECIPIENT, counter: 0n, durationSeconds: 86400 });
+  return { order, hash: hashOrderComponents(order) };
+}
+
+function setupCancel(h: Harness, tokenIds: string[]): string[] {
+  return tokenIds.map((tokenId) => {
+    const { order, hash } = ownListing(tokenId);
+    h.api.routes.set(`GET /v1/orders/asks/oswiki-${hash}/components`, () => ({ parameters: serializeOrderComponents(order) }));
+    return `oswiki-${hash}`;
+  });
+}
+
+function recorder(decision: 'confirmed' | 'declined' = 'confirmed'): HumanConfirmer & { asked: string[] } {
+  const asked: string[] = [];
+  return { asked, available: () => true, ask: async (message) => { asked.push(message); return decision; } };
+}
+
+async function previewBuy(h: Harness): Promise<string> {
+  const preview = await h.call('preview_buy', { chainId: 1, askIds: [vectorAskId] });
+  expect(preview.isError).toBe(false);
+  return preview.text;
+}
+
+describe('human confirmation (H2)', () => {
+  it('refuses execute when the client has no confirmation dialog, and says so in the preview', async () => {
+    const h = harness();
+    h.handler.confirmer = NO_HUMAN_CONFIRMER;
+    setupBuy(h);
+    const text = await previewBuy(h);
+    expect(text).toMatch(/cannot show the confirmation dialog, so execute will be refused/);
+    const result = await h.call('execute', { confirmId: confirmIdOf(text) });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/cannot show oswiki-sign's confirmation dialog/);
+    expect(h.chain.sent).toHaveLength(0);
+    expect(h.ctx.state.tradesToday()).toBe(0);
+    expect((await h.call('wallet_status')).text).toMatch(/execute is refused \(OSWIKI_CONFIRM_MODE=human\)/);
+  });
+
+  it('runs on the AI confirmation only with OSWIKI_CONFIRM_MODE=ai, and says so loudly', async () => {
+    const h = harness({ env: { OSWIKI_CONFIRM_MODE: 'ai' }, logsFor: () => [fulfilledLog(vectorHash, OTHER_SELLER)] });
+    h.handler.confirmer = NO_HUMAN_CONFIRMER;
+    setupBuy(h);
+    const text = await previewBuy(h);
+    expect(text).toMatch(/WARNING - CONFIRM MODE AI/);
+    expect((await h.call('wallet_status')).text).toMatch(/WARNING - OSWIKI_CONFIRM_MODE=ai/);
+    const result = await h.call('execute', { confirmId: confirmIdOf(text) });
+    expect(result.isError).toBe(false);
+    expect(h.chain.sent).toHaveLength(1);
+  });
+
+  it('shows the full preview in the dialog and sends nothing when the user declines', async () => {
+    const h = harness();
+    const dialog = recorder('declined');
+    h.handler.confirmer = dialog;
+    setupBuy(h);
+    const text = await previewBuy(h);
+    const result = await h.call('execute', { confirmId: confirmIdOf(text) });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/did not approve/);
+    expect(dialog.asked).toHaveLength(1);
+    expect(dialog.asked[0]).toContain('Total: 1 ETH');
+    expect(dialog.asked[0]).toContain(vectorAskId);
+    expect(h.chain.sent).toHaveLength(0);
+    expect((await h.call('execute', { confirmId: confirmIdOf(text) })).text).toMatch(/already used/);
+  });
+
+  it('still asks the human in ai mode when the client has the dialog', async () => {
+    const h = harness({ env: { OSWIKI_CONFIRM_MODE: 'ai' } });
+    const dialog = recorder('declined');
+    h.handler.confirmer = dialog;
+    setupBuy(h);
+    const result = await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) });
+    expect(result.text).toMatch(/did not approve/);
+    expect(h.chain.sent).toHaveLength(0);
+  });
+
+  it('turns a dialog failure into a refusal', async () => {
+    const h = harness();
+    h.handler.confirmer = { available: () => true, ask: async () => { throw new Error('timed out'); } };
+    setupBuy(h);
+    const result = await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) });
+    expect(result.text).toMatch(/confirmation dialog failed \(timed out\)/);
+    expect(h.chain.sent).toHaveLength(0);
+  });
+
+  it('needs no dialog for a dry run', async () => {
+    const h = harness({ env: { OSWIKI_DRY_RUN: '1' } });
+    const dialog = recorder('declined');
+    h.handler.confirmer = dialog;
+    setupBuy(h);
+    expect((await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) })).text).toMatch(/DRY RUN/);
+    expect(dialog.asked).toHaveLength(0);
+  });
+
+  it('only accept + confirm=true counts, over a real MCP connection with elicitation', async () => {
+    const runs: Array<{ action: 'accept' | 'decline' | 'cancel'; content?: Record<string, unknown>; sent: number; error: boolean }> = [
+      { action: 'accept', content: { confirm: false }, sent: 0, error: true },
+      { action: 'decline', sent: 0, error: true },
+      { action: 'cancel', sent: 0, error: true },
+      { action: 'accept', content: { confirm: true }, sent: 1, error: false },
+    ];
+    for (const run of runs) {
+      const h = harness({ logsFor: () => [fulfilledLog(vectorHash, OTHER_SELLER)] });
+      setupBuy(h);
+      const server = createSignServer(h.handler);
+      const client = new Client({ name: 'test', version: '1.0.0' }, { capabilities: { elicitation: { form: {} } } });
+      const messages: string[] = [];
+      client.setRequestHandler(ElicitRequestSchema, async (request) => {
+        messages.push((request.params as { message: string }).message);
+        return run.content ? { action: run.action, content: run.content } : { action: run.action };
+      });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      const preview = await client.callTool({ name: 'preview_buy', arguments: { chainId: 1, askIds: [vectorAskId] } }) as { content: Array<{ text: string }> };
+      expect(preview.content[0]!.text).toMatch(/confirmation dialog/);
+      const result = await client.callTool({ name: 'execute', arguments: { confirmId: confirmIdOf(preview.content[0]!.text) } }) as { isError?: boolean };
+      expect(result.isError === true).toBe(run.error);
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain('not the AI');
+      expect(h.chain.sent).toHaveLength(run.sent);
+      await client.close();
+    }
+  });
+
+  it('treats a client without the elicitation capability as having no dialog', async () => {
+    const h = harness();
+    setupBuy(h);
+    const server = createSignServer(h.handler);
+    const client = new Client({ name: 'test', version: '1.0.0' }, { capabilities: {} });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    expect(elicitationConfirmer(server).available()).toBe(false);
+    const preview = await client.callTool({ name: 'preview_buy', arguments: { chainId: 1, askIds: [vectorAskId] } }) as { content: Array<{ text: string }> };
+    const result = await client.callTool({ name: 'execute', arguments: { confirmId: confirmIdOf(preview.content[0]!.text) } }) as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/OSWIKI_CONFIRM_MODE=ai/);
+    expect(h.chain.sent).toHaveLength(0);
+    await client.close();
+  });
+
+  it('a handler without a server has no human confirmer', () => {
+    const h = harness();
+    const plain = createToolHandler(h.ctx, text => text);
+    expect(plain.confirmer.available()).toBe(false);
+  });
+});
+
+describe('confirmIds bound to the preview bytes', () => {
+  it('refuses when the stored preview text was changed', async () => {
+    const h = harness();
+    setupBuy(h);
+    const confirmId = confirmIdOf(await previewBuy(h));
+    const entry = (h.handler.store as unknown as { entries: Map<string, { summary: string }> }).entries.get(confirmId)!;
+    entry.summary = entry.summary.replace('1 ETH', '0.1 ETH');
+    expect((await h.call('execute', { confirmId })).text).toMatch(/changed after the preview/);
+    expect(h.chain.sent).toHaveLength(0);
+  });
+});
+
+describe('daily value and cancel caps (M4)', () => {
+  it('defaults the daily spend cap to 3x the per-buy cap', () => {
+    const config = loadConfig({ OSWIKI_MAX_BUY_ETH: '0.5', OSWIKI_DAILY_MAX_APE: '10' });
+    expect(config.dailyMaxWei[1]).toBe(15n * 10n ** 17n);
+    expect(config.dailyMaxWei[33139]).toBe(10n * ETH);
+    expect(config.maxCancelsPerDay).toBe(200);
+  });
+
+  it('sums buy spend per UTC day and chain', async () => {
+    const h = harness({ env: { OSWIKI_DAILY_MAX_ETH: '1.5' }, logsFor: () => [fulfilledLog(vectorHash, OTHER_SELLER)] });
+    setupBuy(h);
+    expect((await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) })).isError).toBe(false);
+    expect(h.ctx.state.spentToday(1)).toBe(ETH);
+    const blocked = await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) });
+    expect(blocked.isError).toBe(true);
+    expect(blocked.text).toMatch(/Daily spend limit on Ethereum: 1 ETH used today plus 1 ETH would exceed 1\.5 ETH \(OSWIKI_DAILY_MAX_ETH/);
+    expect(h.chain.sent).toHaveLength(1);
+    h.setNow(NOW + 86_400_000);
+    expect((await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) })).isError).toBe(false);
+  });
+
+  it('counts every item of an execute and new offer amounts', () => {
+    const listing = { kind: 'listing', chainId: 1, items: [{}, {}, {}], cancels: [{ id: 'a' }, { id: 'b', twinOf: 'a' }] } as never;
+    expect(chargeOf(listing)).toEqual({ chainId: 1, trades: 3, cancels: 1 });
+    expect(chargeOf({ kind: 'offer', chainId: 33139, quantity: 4, amountWei: 2n * ETH } as never)).toEqual({ chainId: 33139, trades: 4, spendWei: 8n * ETH });
+    expect(chargeOf({ kind: 'buy', chainId: 1, entries: [{}, {}], totalValue: 5n } as never)).toEqual({ chainId: 1, trades: 2, spendWei: 5n });
+    expect(chargeOf({ kind: 'cancel', chainId: 1, targets: [{ id: 'a' }, { id: 'b' }, { id: 'c', twinOf: 'b' }] } as never)).toEqual({ chainId: 1, cancels: 2 });
+  });
+
+  it('caps cancels per day, counting each order', async () => {
+    const hashes: Hex[] = [];
+    const h = harness({ env: { OSWIKI_MAX_CANCELS_PER_DAY: '2' }, logsFor: () => cancelLogs(hashes, TEST_ADDRESS) });
+    const ids = setupCancel(h, ['1', '2', '3']);
+    hashes.push(...ids.map(id => id.slice(7) as Hex));
+    const first = await h.call('preview_cancel', { chainId: 1, askIds: ids.slice(0, 2) });
+    expect(first.text).toMatch(/Network fee: about .* now, at most/);
+    expect((await h.call('execute', { confirmId: confirmIdOf(first.text) })).isError).toBe(false);
+    expect(h.ctx.state.cancelsToday()).toBe(2);
+    const second = await h.call('execute', { confirmId: confirmIdOf((await h.call('preview_cancel', { chainId: 1, askIds: [ids[2]!] })).text) });
+    expect(second.text).toMatch(/Daily cancel limit reached: 2 of 2/);
+    expect(h.chain.sent).toHaveLength(1);
+  });
+
+  it('refuses a bulk execute whose items exceed the trades left', async () => {
+    const h = harness({ env: { OSWIKI_MAX_TRADES_PER_DAY: '1' } });
+    const state = h.ctx.state;
+    expect(() => state.check({ chainId: 1, trades: 2 }, { maxTrades: 1, maxCancels: 10, dailyMaxWei: { 1: null, 33139: null } })).toThrow(/this needs 2 more/);
+  });
+});
+
+describe('gas and fee caps (M1)', () => {
+  const approveTx = { chainId: 1 as const, to: WRAPPED_NATIVE[1]!, data: encodeFunctionData({ abi: WRAPPED_NATIVE_ABI, functionName: 'approve', args: [SEAPORT_ADDRESS, ETH] }), value: 0n };
+
+  function chainsWith(env: Record<string, string>, estimate: bigint, tracker?: PendingTracker) {
+    const state = newChainState();
+    const base = makeTransport(1, state, () => []);
+    const transport = custom({
+      async request(args: { method: string; params?: unknown }) {
+        if (args.method === 'eth_estimateGas') return `0x${estimate.toString(16)}`;
+        return base({ chain: mainnet }).request(args as never);
+      },
+    });
+    const wallet = loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY });
+    const config = loadConfig(env);
+    return { state, wallet, chains: createChains(config, wallet.account, { transportFor: () => transport, pollingInterval: 5, tracker }) };
+  }
+
+  it('classifies every allowed tx and caps its gas per kind', () => {
+    expect(assertAllowedTx(approveTx, new Set())).toEqual({ kind: 'approve', orders: 1 });
+    const setApproval = { chainId: 1 as const, to: COLLECTION, data: encodeFunctionData({ abi: NFT_ABI, functionName: 'setApprovalForAll', args: [OPENSEA_CONDUIT_ADDRESS, true] }), value: 0n };
+    expect(assertAllowedTx(setApproval, new Set([COLLECTION]))).toEqual({ kind: 'setApprovalForAll', orders: 1 });
+    expect(gasLimitCap(1, { kind: 'approve', orders: 1 })).toBe(100_000n);
+    expect(gasLimitCap(1, { kind: 'setApprovalForAll', orders: 1 })).toBe(120_000n);
+    expect(gasLimitCap(1, { kind: 'wrap', orders: 1 })).toBe(80_000n);
+    expect(gasLimitCap(1, { kind: 'cancel', orders: 3 })).toBe(180_000n);
+    expect(gasLimitCap(1, { kind: 'buy', orders: 2 })).toBe(600_000n);
+    expect(gasLimitCap(1, { kind: 'accept', orders: 1 })).toBe(400_000n);
+    expect(gasLimitCap(33139, { kind: 'approve', orders: 1 })).toBe(200_000n);
+  });
+
+  it('refuses a gas estimate above the cap for its kind', async () => {
+    const { state, wallet, chains } = chainsWith({}, 150_000n);
+    await expect(sendGuardedTx(chains, wallet.account, approveTx, new Set())).rejects.toThrow(/gas estimate of 150000 is above the approve limit of 100000/);
+    expect(state.sent).toHaveLength(0);
+  });
+
+  it('refuses when the network fee is above OSWIKI_MAX_GWEI and sends capped fees otherwise', async () => {
+    const low = chainsWith({ OSWIKI_MAX_GWEI: '1' }, 50_000n);
+    await expect(sendGuardedTx(low.chains, low.wallet.account, approveTx, new Set())).rejects.toThrow(TxRefusedError);
+    await expect(sendGuardedTx(low.chains, low.wallet.account, approveTx, new Set())).rejects.toThrow(/above the limit of 1 gwei \(OSWIKI_MAX_GWEI\)/);
+    expect(low.state.sent).toHaveLength(0);
+    const ok = chainsWith({}, 50_000n);
+    await sendGuardedTx(ok.chains, ok.wallet.account, approveTx, new Set());
+    expect(ok.state.sent).toHaveLength(1);
+  });
+
+  it('shows the network fee ceiling in previews', async () => {
+    const h = harness();
+    setupBuy(h);
+    const text = await previewBuy(h);
+    expect(text).toMatch(/Network fee: about .* now, at most 0\.09 ETH \(gas limit caps x 200 gwei, OSWIKI_MAX_GWEI\)/);
+    const fee = await networkFee(h.ctx.chains, 1, [{ shape: { kind: 'approve', orders: 1 } }, { shape: { kind: 'wrap', orders: 1 } }]);
+    expect(fee.maxWei).toBe(180_000n * 200n * 10n ** 9n);
+    expect((await networkFee(h.ctx.chains, 1, [])).text).toMatch(/none/);
+  });
+
+  it('warns in the preview when gas is already above the cap', async () => {
+    const h = harness({ env: { OSWIKI_MAX_GWEI: '0.5' } });
+    setupBuy(h);
+    expect(await previewBuy(h)).toMatch(/execute will refuse until it drops/);
+  });
+});
+
+describe('pending transactions (L8)', () => {
+  function tracked(h: Harness) {
+    (h.ctx.chains as { tracker?: PendingTracker }).tracker = h.ctx.state;
+  }
+
+  const stuck = (sentAt: number, nonce = 0): PendingTx => ({ chainId: 1, hash: `0x${'ab'.repeat(32)}`, nonce, label: 'buy', sentAt });
+
+  it('tracks a sent tx until its receipt arrives', async () => {
+    const h = harness({ logsFor: () => [fulfilledLog(vectorHash, OTHER_SELLER)] });
+    tracked(h);
+    const seen: string[] = [];
+    const tracker = h.ctx.state;
+    (h.ctx.chains as { tracker?: PendingTracker }).tracker = {
+      pendingTxs: chainId => tracker.pendingTxs(chainId),
+      addPending: (entry) => { seen.push(`add ${entry.label} ${entry.nonce}`); tracker.addPending(entry); },
+      removePending: (hash) => { seen.push('remove'); tracker.removePending(hash); },
+    };
+    setupBuy(h);
+    expect((await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) })).isError).toBe(false);
+    expect(seen).toEqual(['add buy 0', 'remove']);
+    expect(h.ctx.state.pendingTxs()).toEqual([]);
+  });
+
+  it('refuses to send while an unconfirmed tx may still land, and clears it later', async () => {
+    const h = harness({ logsFor: () => [fulfilledLog(vectorHash, OTHER_SELLER)] });
+    tracked(h);
+    setupBuy(h);
+    h.ctx.state.addPending(stuck(NOW));
+    const blocked = await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) });
+    expect(blocked.isError).toBe(true);
+    expect(blocked.text).toMatch(/still pending on Ethereum/);
+    expect(h.chain.sent).toHaveLength(0);
+    expect((await h.call('wallet_status')).text).toContain(`pending transactions: buy 0x${'ab'.repeat(32)}`);
+    h.setNow(NOW + 31 * 60_000);
+    expect((await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) })).isError).toBe(false);
+    expect(h.ctx.state.pendingTxs()).toEqual([]);
+  });
+
+  it('clears a tx once mined or once its nonce was used, and blocks while the node knows it', async () => {
+    const entry = stuck(NOW, 3);
+    const store: PendingTx[] = [entry];
+    const tracker: PendingTracker = { pendingTxs: () => store, addPending: () => undefined, removePending: (hash) => { store.splice(store.findIndex(item => item.hash === hash), 1); } };
+    const answers: Record<string, unknown> = { eth_getTransactionReceipt: null, eth_getTransactionByHash: null, eth_getTransactionCount: '0x3' };
+    const wallet = loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY });
+    const transport = custom({ async request({ method }: { method: string }) { return answers[method] ?? null; } });
+    const chains = createChains(loadConfig({}), wallet.account, { transportFor: () => transport, tracker });
+    await expect(assertNoPendingTx(chains, wallet.account, 1, () => NOW)).rejects.toThrow(PendingTxError);
+    answers.eth_getTransactionByHash = { hash: entry.hash, nonce: '0x3', blockHash: null, blockNumber: null, from: TEST_ADDRESS, to: SEAPORT_ADDRESS, value: '0x0', gas: '0x1', input: '0x', type: '0x2', maxFeePerGas: '0x1', maxPriorityFeePerGas: '0x1', chainId: '0x1', v: '0x0', r: '0x1', s: '0x1', yParity: '0x0', accessList: [], transactionIndex: null };
+    await expect(assertNoPendingTx(chains, wallet.account, 1, () => NOW + 60 * 60_000)).rejects.toThrow(PendingTxError);
+    answers.eth_getTransactionByHash = null;
+    answers.eth_getTransactionCount = '0x4';
+    await assertNoPendingTx(chains, wallet.account, 1, () => NOW);
+    expect(store).toHaveLength(0);
+  });
+});
+
+describe('state file (L7)', () => {
+  const key = (byte: number) => new Uint8Array(32).fill(byte);
+  const limits = { maxTrades: 10, maxCancels: 10, dailyMaxWei: { 1: 10n * ETH, 33139: null } };
+
+  it('treats every cap as used when the file was edited, and survives a deletion in-process', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oswiki-state-'));
+    const state = new TradeState(dir, 10, () => NOW, { macKey: key(1) });
+    state.record({ chainId: 1, trades: 3, spendWei: 2n * ETH }, limits);
+    expect(state.tradesToday()).toBe(3);
+    const file = join(dir, 'state.json');
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    expect(raw.mac).toMatch(/^[0-9a-f]{64}$/);
+    writeFileSync(file, JSON.stringify({ ...raw, trades: 0, spent: { 1: '0', 33139: '0' } }));
+    expect(state.isTampered()).toBe(true);
+    expect(() => state.check({ chainId: 1, cancels: 1 }, limits)).toThrow(/integrity check/);
+    expect(() => state.record({ chainId: 1, trades: 1 }, limits)).toThrow(/integrity check/);
+
+    const fresh = mkdtempSync(join(tmpdir(), 'oswiki-state-'));
+    const other = new TradeState(fresh, 10, () => NOW, { macKey: key(1) });
+    other.record({ chainId: 1, trades: 4 }, limits);
+    writeFileSync(join(fresh, 'state.json'), readFileSync(join(fresh, 'state.json'), 'utf8'));
+    expect(new TradeState(fresh, 10, () => NOW, { macKey: key(2) }).isTampered()).toBe(true);
+    expect(new TradeState(fresh, 10, () => NOW, { macKey: key(1) }).tradesToday()).toBe(4);
+    writeFileSync(join(fresh, 'state.json'), '');
+    expect(other.remaining()).toBe(0);
+  });
+
+  it('keeps its own bookings when the file is deleted mid-session', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oswiki-state-'));
+    const state = new TradeState(dir, 5, () => NOW, { macKey: key(1) });
+    state.record({ chainId: 1, trades: 5 }, { ...limits, maxTrades: 5 });
+    const { rmSync } = await import('node:fs');
+    rmSync(join(dir, 'state.json'));
+    expect(state.tradesToday()).toBe(5);
+    expect(() => state.record({ chainId: 1, trades: 1 }, { ...limits, maxTrades: 5 })).toThrow(/Daily trade limit/);
+  });
+
+  it('writes atomically and removes a stale lock', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oswiki-state-'));
+    const state = new TradeState(dir, 10, () => NOW, { macKey: key(1) });
+    writeFileSync(join(dir, 'state.lock'), 'old');
+    const old = (Date.now() - LOCK_STALE_MS - 5_000) / 1000;
+    utimesSync(join(dir, 'state.lock'), old, old);
+    state.record({ chainId: 1, trades: 1 }, limits);
+    expect(state.tradesToday()).toBe(1);
+    expect(existsSync(join(dir, 'state.lock'))).toBe(false);
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('waits for a held lock and gives up without writing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oswiki-state-'));
+    const state = new TradeState(dir, 10, () => NOW, { macKey: key(1) });
+    writeFileSync(join(dir, 'state.lock'), 'busy');
+    expect(() => state.record({ chainId: 1, trades: 1 }, limits)).toThrow(StateLockError);
+    expect(existsSync(join(dir, 'state.json'))).toBe(false);
+  });
+
+  it('keeps pending txs MAC-protected and across days', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oswiki-state-'));
+    let now = NOW;
+    const state = new TradeState(dir, 10, () => now, { macKey: key(1) });
+    state.addPending({ chainId: 33139, hash: `0x${'CD'.repeat(32)}` as Hex, nonce: 7, label: 'cancel', sentAt: NOW });
+    now += 2 * 86_400_000;
+    expect(state.pendingTxs(33139)).toEqual([{ chainId: 33139, hash: `0x${'cd'.repeat(32)}`, nonce: 7, label: 'cancel', sentAt: NOW }]);
+    expect(state.pendingTxs(1)).toEqual([]);
+    state.removePending(`0x${'CD'.repeat(32)}`);
+    expect(state.pendingTxs()).toEqual([]);
+  });
+});
+
+describe('key file (H4)', () => {
+  function keyFile(content: string, mode = 0o600): string {
+    const dir = mkdtempSync(join(tmpdir(), 'oswiki-key-'));
+    const path = join(dir, 'key');
+    writeFileSync(path, content);
+    chmodSync(path, mode);
+    return path;
+  }
+
+  it('reads the key from OSWIKI_WALLET_KEY_FILE and removes both variables', () => {
+    const env: NodeJS.ProcessEnv = { OSWIKI_WALLET_KEY_FILE: keyFile(`﻿${TEST_KEY}\n`) };
+    const wallet = loadWallet(env, 'win32');
+    expect(wallet.account.address.toLowerCase()).toBe(TEST_ADDRESS);
+    expect(env.OSWIKI_WALLET_KEY_FILE).toBeUndefined();
+    expect(wallet.warnings).toEqual([expect.stringMatching(/cannot check who may read the key file.*%USERPROFILE%/)]);
+    expect(wallet.stateKey).toHaveLength(32);
+    expect(loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY }).stateKey.equals(wallet.stateKey)).toBe(true);
+  });
+
+  it('warns about a key file other users can read on POSIX', () => {
+    const path = keyFile(TEST_KEY, 0o644);
+    expect(loadWallet({ OSWIKI_WALLET_KEY_FILE: path }, 'linux').warnings[0]).toMatch(/readable by other users .*chmod 600/);
+    expect(loadWallet({ OSWIKI_WALLET_KEY_FILE: path }, 'win32').warnings).toEqual([expect.stringMatching(/Windows/)]);  });
+
+  it('refuses both sources, a missing file, a huge file and bad content without echoing it', () => {
+    expect(() => loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY, OSWIKI_WALLET_KEY_FILE: keyFile(TEST_KEY) })).toThrow(/only one/);
+    expect(() => loadWallet({ OSWIKI_WALLET_KEY_FILE: join(tmpdir(), 'oswiki-missing-key') })).toThrow(/could not be opened/);
+    expect(() => loadWallet({ OSWIKI_WALLET_KEY_FILE: keyFile('a'.repeat(5000)) })).toThrow(/too large/);
+    const bad = `${TEST_KEY}ff`;
+    try {
+      loadWallet({ OSWIKI_WALLET_KEY_FILE: keyFile(bad) });
+      expect.unreachable();
+    } catch (err) {
+      expect((err as Error).message).toMatch(/OSWIKI_WALLET_KEY_FILE does not hold a valid private key/);
+      expect((err as Error).message).not.toContain(bad.slice(2, 40));
+    }
+  });
+});

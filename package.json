@@ -1,0 +1,55 @@
+{
+  "name": "@oswikixyz/sign",
+  "version": "0.1.0",
+  "description": "Local OSWiki trading signer: an MCP server that lists, buys, cancels and makes offers with a key that never leaves your machine",
+  "author": "OSWiki Labs",
+  "license": "MIT",
+  "homepage": "https://oswiki.xyz/developers",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oswiki-labs/oswiki-sign.git"
+  },
+  "bugs": {
+    "url": "https://github.com/oswiki-labs/oswiki-sign/issues"
+  },
+  "keywords": [
+    "mcp",
+    "seaport",
+    "nft",
+    "ethereum",
+    "apechain",
+    "oswiki"
+  ],
+  "type": "module",
+  "bin": {
+    "oswiki-sign": "dist/index.js"
+  },
+  "files": [
+    "dist/index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check:pack": "node scripts/check-pack.mjs",
+    "test:bundle": "vitest run tests/bundle.test.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "viem": "2.57.4",
+    "vitest": "4.1.11",
+    "zod": "4.6.5"
+  }
+}

@@ -1,0 +1,1605 @@
+{
+  "description": "Seaport 1.6 cross-stack vectors. Struct hashes asserted equal to Seaport.getOrderHash() and every non-padding signature accepted by Seaport.validate(), both via read-only eth_call when this file was written. Wire encoding per the interface contract: uint256 as decimal strings, itemType/orderType/totalOriginalConsiderationItems as integers, lowercase hex.",
+  "notes": [
+    "erc721: Otherdeed Expanded #1, 1 ETH total, fee 1% to the mainnet fee recipient, royalty 5% to 0x...dead, counter 0, salt OSWI + 28 x 0x11, signed under the chain 1 domain; apechain = the same struct signed under the 33139 domain.",
+    "erc1155: the erc721 order with an ERC-1155 offer of 5 units and orderType 1 (PARTIAL_OPEN); consideration unchanged (1 ETH total, every amount divisible by 5).",
+    "bulk: orders differing only in identifierOrCriteria 1..n with n = 2, 3, 5 (heights 1, 2, 3); heights 2 and 3 are padded with the blank OrderComponents (all zero, empty arrays). Every leaf, padding included, carries signature || uint24 index || proof.",
+    "signatureEip2098: the erc721 signature in 64-byte compact form."
+  ],
+  "generatedAt": "2026-09-26",
+  "seaport": "0x0000000000000068f116a894984e2db1123eb395",
+  "signer": {
+    "privateKey": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+  },
+  "typehashes": {
+    "orderComponents": "0xfa445660b7e21515a59617fcd68910b487aa5808b8abda3d78bc85df364b2c2f"
+  },
+  "domains": {
+    "1": {
+      "chainId": 1,
+      "name": "Seaport",
+      "version": "1.6",
+      "separator": "0xfce34bc6e1752c1117e5063116d25cad2fa2bdcf15ff2d2e275eece7dc31ba64"
+    },
+    "33139": {
+      "chainId": 33139,
+      "name": "Seaport",
+      "version": "1.6",
+      "separator": "0x121aa5d5f85f73aded62c2d52479d8093813c443c0a40ab9974c211b960d7222"
+    }
+  },
+  "blankOrderHash": "0x06bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea",
+  "orders": {
+    "erc721": {
+      "chainId": 1,
+      "parameters": {
+        "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "zone": "0x0000000000000000000000000000000000000000",
+        "offer": [
+          {
+            "itemType": 2,
+            "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+            "identifierOrCriteria": "1",
+            "startAmount": "1",
+            "endAmount": "1"
+          }
+        ],
+        "consideration": [
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "940000000000000000",
+            "endAmount": "940000000000000000",
+            "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "10000000000000000",
+            "endAmount": "10000000000000000",
+            "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "50000000000000000",
+            "endAmount": "50000000000000000",
+            "recipient": "0x000000000000000000000000000000000000dead"
+          }
+        ],
+        "orderType": 0,
+        "startTime": "1767225600",
+        "endTime": "1798761600",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+        "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+        "counter": "0",
+        "totalOriginalConsiderationItems": 3
+      },
+      "orderHash": "0xdd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe500",
+      "digest": "0x7e5dc966c91e12d2a9573516c693d64140a4702be81de964f83471b511bae974",
+      "signature": "0x2139b28c8229eef484f64ba92d555a84ae6b31f237fed96fd5752926ab66dda2414c9201f7015a3a48261360d665a1aa36e62074e2a481d73d2d1e6567e40cf01c",
+      "signatureEip2098": "0x2139b28c8229eef484f64ba92d555a84ae6b31f237fed96fd5752926ab66dda2c14c9201f7015a3a48261360d665a1aa36e62074e2a481d73d2d1e6567e40cf0",
+      "apechain": {
+        "chainId": 33139,
+        "digest": "0xcadcf3da9572b878b07a22d7e460d5a7dbdf514a8ceeeec48be05df83bebc62c",
+        "signature": "0x34f15dfc1d81df85f2fe856ebf8a6a00bdeecc1a0059a70e3256bbc045e376de72aff85ac55ca7818aaeb6a1f95dbbc66fad05ef1038c586b8744ac6d0ff284b1c"
+      }
+    },
+    "erc1155": {
+      "chainId": 1,
+      "parameters": {
+        "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "zone": "0x0000000000000000000000000000000000000000",
+        "offer": [
+          {
+            "itemType": 3,
+            "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+            "identifierOrCriteria": "1",
+            "startAmount": "5",
+            "endAmount": "5"
+          }
+        ],
+        "consideration": [
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "940000000000000000",
+            "endAmount": "940000000000000000",
+            "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "10000000000000000",
+            "endAmount": "10000000000000000",
+            "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+          },
+          {
+            "itemType": 0,
+            "token": "0x0000000000000000000000000000000000000000",
+            "identifierOrCriteria": "0",
+            "startAmount": "50000000000000000",
+            "endAmount": "50000000000000000",
+            "recipient": "0x000000000000000000000000000000000000dead"
+          }
+        ],
+        "orderType": 1,
+        "startTime": "1767225600",
+        "endTime": "1798761600",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+        "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+        "counter": "0",
+        "totalOriginalConsiderationItems": 3
+      },
+      "orderHash": "0x51c0ffb7da49a3b3c6b2f5c3369288d16ba6a6a9f6a0357f68d1a902a39b0d52",
+      "digest": "0x7c8009234a86f27b39be4ab5bf18888ef7e783812f647adcd64b2ec37e4814f2",
+      "signature": "0xeabc4c79430b44db4c5c9f22ee3227f93824b7814d208c65dbfcc3663da14e487e95bd8e06fe2ade6a0491b1b8428bd09c7d7c7e08b325d91d5a96a3c0b539271c"
+    }
+  },
+  "bulk": [
+    {
+      "chainId": 1,
+      "height": 1,
+      "orderCount": 2,
+      "bulkOrderTypehash": "0x3ca2711d29384747a8f61d60aad3c450405f7aaff5613541dee28df2d6986d32",
+      "root": "0x613bfb6689d8a3da13b83f791e54a8d30cc81a6548365a2c201e50c4c57c30e8",
+      "bulkOrderHash": "0x1c0fd78b2684c51fed4082276e4b46d44f0e84d61a2973de7c8df87185a602b6",
+      "digest": "0xf969993395355a234c29bb9dd1c3e8fdc3d9f26a63f95938d7d3f3c728f8f2d2",
+      "rootSignature": "0x6a56857a728d41ef06da160a90b9e7e37221e407e2ddfbe19b5b2be620764945367d1002591ba3f04e747221148042ec4e7d5e112ce534f9959942f416553c0a1c",
+      "leaves": [
+        {
+          "index": 0,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "1",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0xdd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe500",
+          "proof": [
+            "0x42813b598c72b06d1bb219d9aea7f82f43e38bd74d94a0b39cdf614a54110879"
+          ],
+          "signature": "0x6a56857a728d41ef06da160a90b9e7e37221e407e2ddfbe19b5b2be620764945367d1002591ba3f04e747221148042ec4e7d5e112ce534f9959942f416553c0a1c00000042813b598c72b06d1bb219d9aea7f82f43e38bd74d94a0b39cdf614a54110879"
+        },
+        {
+          "index": 1,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "2",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0x42813b598c72b06d1bb219d9aea7f82f43e38bd74d94a0b39cdf614a54110879",
+          "proof": [
+            "0xdd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe500"
+          ],
+          "signature": "0x6a56857a728d41ef06da160a90b9e7e37221e407e2ddfbe19b5b2be620764945367d1002591ba3f04e747221148042ec4e7d5e112ce534f9959942f416553c0a1c000001dd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe500"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "height": 2,
+      "orderCount": 3,
+      "bulkOrderTypehash": "0xbf8e29b89f29ed9b529c154a63038ffca562f8d7cd1e2545dda53a1b582dde30",
+      "root": "0x28fdfca596d6942b18e8545b04b834f9f5c9a60f5e8e28e2b100cfd96ae595eb",
+      "bulkOrderHash": "0x1deb6ada13f4678b86d0cc1b95f4c532b0faafcb1c858423baeee5e996df4bbe",
+      "digest": "0x8a9bc87340cd6943f361bdb9a6d80ef37473d014abc7f1407571c47b740f3437",
+      "rootSignature": "0xde1e1d8d2ba05067789ce52b58ad1053bc633c42f14db9633dc47db46544c24645fb37d43ecff69986a94a77e5d56ddec19916a007821c6143ef587d1f60a7991c",
+      "leaves": [
+        {
+          "index": 0,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "1",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0xdd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe500",
+          "proof": [
+            "0x42813b598c72b06d1bb219d9aea7f82f43e38bd74d94a0b39cdf614a54110879",
+            "0x1635d46d89d4e7621425dd139372be8167ff3fcb3baf7e391451c90d3e6e5bd3"
+          ],
+          "signature": "0xde1e1d8d2ba05067789ce52b58ad1053bc633c42f14db9633dc47db46544c24645fb37d43ecff69986a94a77e5d56ddec19916a007821c6143ef587d1f60a7991c00000042813b598c72b06d1bb219d9aea7f82f43e38bd74d94a0b39cdf614a541108791635d46d89d4e7621425dd139372be8167ff3fcb3baf7e391451c90d3e6e5bd3"
+        },
+        {
+          "index": 1,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "2",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0x42813b598c72b06d1bb219d9aea7f82f43e38bd74d94a0b39cdf614a54110879",
+          "proof": [
+            "0xdd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe500",
+            "0x1635d46d89d4e7621425dd139372be8167ff3fcb3baf7e391451c90d3e6e5bd3"
+          ],
+          "signature": "0xde1e1d8d2ba05067789ce52b58ad1053bc633c42f14db9633dc47db46544c24645fb37d43ecff69986a94a77e5d56ddec19916a007821c6143ef587d1f60a7991c000001dd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe5001635d46d89d4e7621425dd139372be8167ff3fcb3baf7e391451c90d3e6e5bd3"
+        },
+        {
+          "index": 2,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "3",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0xc76a8d6442ae92cd07114d05c8517ee06e9029e8e04e9f62a03118e14b8fd401",
+          "proof": [
+            "0x06bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea",
+            "0x613bfb6689d8a3da13b83f791e54a8d30cc81a6548365a2c201e50c4c57c30e8"
+          ],
+          "signature": "0xde1e1d8d2ba05067789ce52b58ad1053bc633c42f14db9633dc47db46544c24645fb37d43ecff69986a94a77e5d56ddec19916a007821c6143ef587d1f60a7991c00000206bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea613bfb6689d8a3da13b83f791e54a8d30cc81a6548365a2c201e50c4c57c30e8"
+        },
+        {
+          "index": 3,
+          "padding": true,
+          "parameters": {
+            "offerer": "0x0000000000000000000000000000000000000000",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [],
+            "consideration": [],
+            "orderType": 0,
+            "startTime": "0",
+            "endTime": "0",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "0",
+            "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 0
+          },
+          "orderHash": "0x06bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea",
+          "proof": [
+            "0xc76a8d6442ae92cd07114d05c8517ee06e9029e8e04e9f62a03118e14b8fd401",
+            "0x613bfb6689d8a3da13b83f791e54a8d30cc81a6548365a2c201e50c4c57c30e8"
+          ],
+          "signature": "0xde1e1d8d2ba05067789ce52b58ad1053bc633c42f14db9633dc47db46544c24645fb37d43ecff69986a94a77e5d56ddec19916a007821c6143ef587d1f60a7991c000003c76a8d6442ae92cd07114d05c8517ee06e9029e8e04e9f62a03118e14b8fd401613bfb6689d8a3da13b83f791e54a8d30cc81a6548365a2c201e50c4c57c30e8"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "height": 3,
+      "orderCount": 5,
+      "bulkOrderTypehash": "0x53c6f6856e13104584dd0797ca2b2779202dc2597c6066a42e0d8fe990b0024d",
+      "root": "0x9f841f5c51cdb549c06cc057f2e682e5735e65df679ad3742a7382e820ee884b",
+      "bulkOrderHash": "0x83908b5ce11fcc9eedb862d906ace36e1f6a110e11d03dd766a18c4168027710",
+      "digest": "0xefd87668e84868aaf04020cfd73ba195de6e25aa2a5b2619f810ef0ba0d4b229",
+      "rootSignature": "0x47372b5b2fb1f5c936d386519f504d0e36ebb271c144416c3b92bfc1460b79e03b142ecb7a98d3d301bbacd6f37bf4b1333a66655c65871a843bcf1d85aac61d1b",
+      "leaves": [
+        {
+          "index": 0,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "1",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0xdd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe500",
+          "proof": [
+            "0x42813b598c72b06d1bb219d9aea7f82f43e38bd74d94a0b39cdf614a54110879",
+            "0xd85befd4e3e0b3d1f215601e2f19a0bf0a4090272629efed1e057077b93ef32f",
+            "0x43c4f128d1d91bcbe009e60e039fe27ac71edf895dc8e3e09540a096d8f7b6dd"
+          ],
+          "signature": "0x47372b5b2fb1f5c936d386519f504d0e36ebb271c144416c3b92bfc1460b79e03b142ecb7a98d3d301bbacd6f37bf4b1333a66655c65871a843bcf1d85aac61d1b00000042813b598c72b06d1bb219d9aea7f82f43e38bd74d94a0b39cdf614a54110879d85befd4e3e0b3d1f215601e2f19a0bf0a4090272629efed1e057077b93ef32f43c4f128d1d91bcbe009e60e039fe27ac71edf895dc8e3e09540a096d8f7b6dd"
+        },
+        {
+          "index": 1,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "2",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0x42813b598c72b06d1bb219d9aea7f82f43e38bd74d94a0b39cdf614a54110879",
+          "proof": [
+            "0xdd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe500",
+            "0xd85befd4e3e0b3d1f215601e2f19a0bf0a4090272629efed1e057077b93ef32f",
+            "0x43c4f128d1d91bcbe009e60e039fe27ac71edf895dc8e3e09540a096d8f7b6dd"
+          ],
+          "signature": "0x47372b5b2fb1f5c936d386519f504d0e36ebb271c144416c3b92bfc1460b79e03b142ecb7a98d3d301bbacd6f37bf4b1333a66655c65871a843bcf1d85aac61d1b000001dd32ac315652bb7da67785f1e31d60d1f79a28760583a88f6e9043ef9c3fe500d85befd4e3e0b3d1f215601e2f19a0bf0a4090272629efed1e057077b93ef32f43c4f128d1d91bcbe009e60e039fe27ac71edf895dc8e3e09540a096d8f7b6dd"
+        },
+        {
+          "index": 2,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "3",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0xc76a8d6442ae92cd07114d05c8517ee06e9029e8e04e9f62a03118e14b8fd401",
+          "proof": [
+            "0xc71b079c7e3a7408e25066590a5a267e9205c130989efd585a717b63e31d1063",
+            "0x613bfb6689d8a3da13b83f791e54a8d30cc81a6548365a2c201e50c4c57c30e8",
+            "0x43c4f128d1d91bcbe009e60e039fe27ac71edf895dc8e3e09540a096d8f7b6dd"
+          ],
+          "signature": "0x47372b5b2fb1f5c936d386519f504d0e36ebb271c144416c3b92bfc1460b79e03b142ecb7a98d3d301bbacd6f37bf4b1333a66655c65871a843bcf1d85aac61d1b000002c71b079c7e3a7408e25066590a5a267e9205c130989efd585a717b63e31d1063613bfb6689d8a3da13b83f791e54a8d30cc81a6548365a2c201e50c4c57c30e843c4f128d1d91bcbe009e60e039fe27ac71edf895dc8e3e09540a096d8f7b6dd"
+        },
+        {
+          "index": 3,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "4",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0xc71b079c7e3a7408e25066590a5a267e9205c130989efd585a717b63e31d1063",
+          "proof": [
+            "0xc76a8d6442ae92cd07114d05c8517ee06e9029e8e04e9f62a03118e14b8fd401",
+            "0x613bfb6689d8a3da13b83f791e54a8d30cc81a6548365a2c201e50c4c57c30e8",
+            "0x43c4f128d1d91bcbe009e60e039fe27ac71edf895dc8e3e09540a096d8f7b6dd"
+          ],
+          "signature": "0x47372b5b2fb1f5c936d386519f504d0e36ebb271c144416c3b92bfc1460b79e03b142ecb7a98d3d301bbacd6f37bf4b1333a66655c65871a843bcf1d85aac61d1b000003c76a8d6442ae92cd07114d05c8517ee06e9029e8e04e9f62a03118e14b8fd401613bfb6689d8a3da13b83f791e54a8d30cc81a6548365a2c201e50c4c57c30e843c4f128d1d91bcbe009e60e039fe27ac71edf895dc8e3e09540a096d8f7b6dd"
+        },
+        {
+          "index": 4,
+          "padding": false,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "5",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 0,
+                "token": "0x0000000000000000000000000000000000000000",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965766260257839704276835016366760357426627421125479836918888560489206033",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0x1b1e6b688b08022ce8e67a7c58f41b9d67ab716614c2f445a0408f69351415ef",
+          "proof": [
+            "0x06bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea",
+            "0xd34b12e74ee846c338466455cad0c77d7d37d1f8072d72ed279c9c9e7f80a2b5",
+            "0xd0d69516e63b3f036389537ce16f84d88292166f51765ac39cef5b47a0305f04"
+          ],
+          "signature": "0x47372b5b2fb1f5c936d386519f504d0e36ebb271c144416c3b92bfc1460b79e03b142ecb7a98d3d301bbacd6f37bf4b1333a66655c65871a843bcf1d85aac61d1b00000406bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ead34b12e74ee846c338466455cad0c77d7d37d1f8072d72ed279c9c9e7f80a2b5d0d69516e63b3f036389537ce16f84d88292166f51765ac39cef5b47a0305f04"
+        },
+        {
+          "index": 5,
+          "padding": true,
+          "parameters": {
+            "offerer": "0x0000000000000000000000000000000000000000",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [],
+            "consideration": [],
+            "orderType": 0,
+            "startTime": "0",
+            "endTime": "0",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "0",
+            "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 0
+          },
+          "orderHash": "0x06bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea",
+          "proof": [
+            "0x1b1e6b688b08022ce8e67a7c58f41b9d67ab716614c2f445a0408f69351415ef",
+            "0xd34b12e74ee846c338466455cad0c77d7d37d1f8072d72ed279c9c9e7f80a2b5",
+            "0xd0d69516e63b3f036389537ce16f84d88292166f51765ac39cef5b47a0305f04"
+          ],
+          "signature": "0x47372b5b2fb1f5c936d386519f504d0e36ebb271c144416c3b92bfc1460b79e03b142ecb7a98d3d301bbacd6f37bf4b1333a66655c65871a843bcf1d85aac61d1b0000051b1e6b688b08022ce8e67a7c58f41b9d67ab716614c2f445a0408f69351415efd34b12e74ee846c338466455cad0c77d7d37d1f8072d72ed279c9c9e7f80a2b5d0d69516e63b3f036389537ce16f84d88292166f51765ac39cef5b47a0305f04"
+        },
+        {
+          "index": 6,
+          "padding": true,
+          "parameters": {
+            "offerer": "0x0000000000000000000000000000000000000000",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [],
+            "consideration": [],
+            "orderType": 0,
+            "startTime": "0",
+            "endTime": "0",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "0",
+            "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 0
+          },
+          "orderHash": "0x06bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea",
+          "proof": [
+            "0x06bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea",
+            "0x6d1cc828e31688ae588c4e4b7087761d965498347d546826acc144bad4f7df7f",
+            "0xd0d69516e63b3f036389537ce16f84d88292166f51765ac39cef5b47a0305f04"
+          ],
+          "signature": "0x47372b5b2fb1f5c936d386519f504d0e36ebb271c144416c3b92bfc1460b79e03b142ecb7a98d3d301bbacd6f37bf4b1333a66655c65871a843bcf1d85aac61d1b00000606bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea6d1cc828e31688ae588c4e4b7087761d965498347d546826acc144bad4f7df7fd0d69516e63b3f036389537ce16f84d88292166f51765ac39cef5b47a0305f04"
+        },
+        {
+          "index": 7,
+          "padding": true,
+          "parameters": {
+            "offerer": "0x0000000000000000000000000000000000000000",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [],
+            "consideration": [],
+            "orderType": 0,
+            "startTime": "0",
+            "endTime": "0",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "0",
+            "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 0
+          },
+          "orderHash": "0x06bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea",
+          "proof": [
+            "0x06bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea",
+            "0x6d1cc828e31688ae588c4e4b7087761d965498347d546826acc144bad4f7df7f",
+            "0xd0d69516e63b3f036389537ce16f84d88292166f51765ac39cef5b47a0305f04"
+          ],
+          "signature": "0x47372b5b2fb1f5c936d386519f504d0e36ebb271c144416c3b92bfc1460b79e03b142ecb7a98d3d301bbacd6f37bf4b1333a66655c65871a843bcf1d85aac61d1b00000706bfdd4fee487c47799fd9aa57225e03268298d2983ff74cbab178665fab33ea6d1cc828e31688ae588c4e4b7087761d965498347d546826acc144bad4f7df7fd0d69516e63b3f036389537ce16f84d88292166f51765ac39cef5b47a0305f04"
+        }
+      ]
+    }
+  ],
+  "offers": {
+    "notes": [
+      "Release 2 (Seaport offers). Signer = anvil key #0 (signer above), counter 0, orderType 0 (FULL_OPEN), zone/zoneHash 0, conduitKey 0 (the bidder approves Seaport itself), times 1767225600 -> 1798761600, salt OSWI + 28 x 0x22.",
+      "offerErc721: offer WETH 1e18; consideration [ERC721 Otherdeed Expanded #1 -> offerer, WETH 1e16 -> mainnet fee recipient, WETH 5e16 -> 0x...dead]. apechain (on every offer kind) = the same struct with WAPE and the fee to the ApeChain splitter, signed under the 33139 domain.",
+      "offerErc1155: offerErc721 with consideration[0] itemType 3 (amount 1); basicOrderType 20. offerCollection: consideration[0] = {4 (ERC721_WITH_CRITERIA), Otherdeed Expanded, 0, 1, 1}.",
+      "basicOrderParameters / acceptCollection: the accept payload in the /bids/accept-data wire encoding; calldata = the ABI-encoded call (what the backend builds); sentCalldata = the exact bytes the frontend sends, the same call followed by the 4-byte OSWiki domain tag 0xda32920a. Counts and indices (totalOriginalAdditionalRecipients, numerator, denominator, resolver and fulfillment indices) are JSON integers.",
+      "acceptCollection: matchAdvancedOrders for offerCollection, tokenId 42, fulfiller anvil #1; mirror (unsigned) times 1767225600 -> 1767227400, salt OSWI + 28 x 0x33, conduitKey = OpenSea; mirrorOrderHash is its struct hash with counter 0, for reference only.",
+      "offerCollectionBulk: height 1, leaf 0 = offerCollection, leaf 1 = the same with the last salt byte 0x23; every leaf signature = rootSignature || uint24 index || proof.",
+      "Every struct hash was asserted equal to Seaport.getOrderHash() and every signature accepted by Seaport.validate() (eth_call on the order chain) when this block was written; the mirror was hash-checked only."
+    ],
+    "offerErc721": {
+      "chainId": 1,
+      "parameters": {
+        "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "zone": "0x0000000000000000000000000000000000000000",
+        "offer": [
+          {
+            "itemType": 1,
+            "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "identifierOrCriteria": "0",
+            "startAmount": "1000000000000000000",
+            "endAmount": "1000000000000000000"
+          }
+        ],
+        "consideration": [
+          {
+            "itemType": 2,
+            "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+            "identifierOrCriteria": "1",
+            "startAmount": "1",
+            "endAmount": "1",
+            "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+          },
+          {
+            "itemType": 1,
+            "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "identifierOrCriteria": "0",
+            "startAmount": "10000000000000000",
+            "endAmount": "10000000000000000",
+            "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+          },
+          {
+            "itemType": 1,
+            "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "identifierOrCriteria": "0",
+            "startAmount": "50000000000000000",
+            "endAmount": "50000000000000000",
+            "recipient": "0x000000000000000000000000000000000000dead"
+          }
+        ],
+        "orderType": 0,
+        "startTime": "1767225600",
+        "endTime": "1798761600",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+        "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "counter": "0",
+        "totalOriginalConsiderationItems": 3
+      },
+      "orderHash": "0x173edba13ed8ea8f6afdeaf619ed724a1dca69a5c22caa859f614b8ec35c79e8",
+      "digest": "0xad6bf0c023a3ab09b31b7075d01355ff420abd36a213c3b1f89faa3930a63c29",
+      "signature": "0x5b7b201cb413f11db06b039c237668d08d0b9a8ce2471d9cda57b137a89156970b08bba4b4367632d4ca7930d9acac0060cabceb8dcc40e3e91b88b98c672bbf1b",
+      "basicOrderParameters": {
+        "considerationToken": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+        "considerationIdentifier": "1",
+        "considerationAmount": "1",
+        "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "zone": "0x0000000000000000000000000000000000000000",
+        "offerToken": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+        "offerIdentifier": "0",
+        "offerAmount": "1000000000000000000",
+        "basicOrderType": 16,
+        "startTime": "1767225600",
+        "endTime": "1798761600",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+        "offererConduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "fulfillerConduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+        "totalOriginalAdditionalRecipients": 2,
+        "additionalRecipients": [
+          {
+            "amount": "10000000000000000",
+            "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+          },
+          {
+            "amount": "50000000000000000",
+            "recipient": "0x000000000000000000000000000000000000dead"
+          }
+        ],
+        "signature": "0x5b7b201cb413f11db06b039c237668d08d0b9a8ce2471d9cda57b137a89156970b08bba4b4367632d4ca7930d9acac0060cabceb8dcc40e3e91b88b98c672bbf1b"
+      },
+      "calldata": "0x000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d2837100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb922660000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f5357492222222222222222222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000000000000000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f00000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000024000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000002386f26fc100000000000000000000000000003a1d5441892ea68e7b0dc79ed849a0f5db0b150400000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000000415b7b201cb413f11db06b039c237668d08d0b9a8ce2471d9cda57b137a89156970b08bba4b4367632d4ca7930d9acac0060cabceb8dcc40e3e91b88b98c672bbf1b00000000000000000000000000000000000000000000000000000000000000",
+      "sentCalldata": "0x000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d2837100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb922660000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f5357492222222222222222222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000000000000000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f00000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000024000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000002386f26fc100000000000000000000000000003a1d5441892ea68e7b0dc79ed849a0f5db0b150400000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000000415b7b201cb413f11db06b039c237668d08d0b9a8ce2471d9cda57b137a89156970b08bba4b4367632d4ca7930d9acac0060cabceb8dcc40e3e91b88b98c672bbf1b00000000000000000000000000000000000000000000000000000000000000da32920a",
+      "apechain": {
+        "chainId": 33139,
+        "parameters": {
+          "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+          "zone": "0x0000000000000000000000000000000000000000",
+          "offer": [
+            {
+              "itemType": 1,
+              "token": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+              "identifierOrCriteria": "0",
+              "startAmount": "1000000000000000000",
+              "endAmount": "1000000000000000000"
+            }
+          ],
+          "consideration": [
+            {
+              "itemType": 2,
+              "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+              "identifierOrCriteria": "1",
+              "startAmount": "1",
+              "endAmount": "1",
+              "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+            },
+            {
+              "itemType": 1,
+              "token": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+              "identifierOrCriteria": "0",
+              "startAmount": "10000000000000000",
+              "endAmount": "10000000000000000",
+              "recipient": "0x70a5af9ff16b9c436dbe6c1796930f4e1795abc6"
+            },
+            {
+              "itemType": 1,
+              "token": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+              "identifierOrCriteria": "0",
+              "startAmount": "50000000000000000",
+              "endAmount": "50000000000000000",
+              "recipient": "0x000000000000000000000000000000000000dead"
+            }
+          ],
+          "orderType": 0,
+          "startTime": "1767225600",
+          "endTime": "1798761600",
+          "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+          "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "counter": "0",
+          "totalOriginalConsiderationItems": 3
+        },
+        "orderHash": "0x5ba4ca07b22165ed91029cf37e675634b8bc1f9b7d32d03ba3ea4a7891fb680d",
+        "digest": "0x997a0a3830c2c73764f5920ea1129343f6a6a9fcb73e8ce49df6491339e7c8d7",
+        "signature": "0x74bb2337aa4e63b31c11223fa0489435a0ccbf5833001eedcb7e43cb107e207860240a3f8ed4c2835a11255a2636945c5f86b9ad4bcfc7c957831be79a0add561b",
+        "basicOrderParameters": {
+          "considerationToken": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+          "considerationIdentifier": "1",
+          "considerationAmount": "1",
+          "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+          "zone": "0x0000000000000000000000000000000000000000",
+          "offerToken": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+          "offerIdentifier": "0",
+          "offerAmount": "1000000000000000000",
+          "basicOrderType": 16,
+          "startTime": "1767225600",
+          "endTime": "1798761600",
+          "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+          "offererConduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "fulfillerConduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+          "totalOriginalAdditionalRecipients": 2,
+          "additionalRecipients": [
+            {
+              "amount": "10000000000000000",
+              "recipient": "0x70a5af9ff16b9c436dbe6c1796930f4e1795abc6"
+            },
+            {
+              "amount": "50000000000000000",
+              "recipient": "0x000000000000000000000000000000000000dead"
+            }
+          ],
+          "signature": "0x74bb2337aa4e63b31c11223fa0489435a0ccbf5833001eedcb7e43cb107e207860240a3f8ed4c2835a11255a2636945c5f86b9ad4bcfc7c957831be79a0add561b"
+        },
+        "calldata": "0x000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d2837100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb92266000000000000000000000000000000000000000000000000000000000000000000000000000000000000000048b62137edfa95a428d35c09e44256a739f6b55700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f5357492222222222222222222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000000000000000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f00000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000024000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000002386f26fc1000000000000000000000000000070a5af9ff16b9c436dbe6c1796930f4e1795abc600000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead000000000000000000000000000000000000000000000000000000000000004174bb2337aa4e63b31c11223fa0489435a0ccbf5833001eedcb7e43cb107e207860240a3f8ed4c2835a11255a2636945c5f86b9ad4bcfc7c957831be79a0add561b00000000000000000000000000000000000000000000000000000000000000",
+        "sentCalldata": "0x000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d2837100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb92266000000000000000000000000000000000000000000000000000000000000000000000000000000000000000048b62137edfa95a428d35c09e44256a739f6b55700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f5357492222222222222222222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000000000000000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f00000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000024000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000002386f26fc1000000000000000000000000000070a5af9ff16b9c436dbe6c1796930f4e1795abc600000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead000000000000000000000000000000000000000000000000000000000000004174bb2337aa4e63b31c11223fa0489435a0ccbf5833001eedcb7e43cb107e207860240a3f8ed4c2835a11255a2636945c5f86b9ad4bcfc7c957831be79a0add561b00000000000000000000000000000000000000000000000000000000000000da32920a"
+      }
+    },
+    "offerErc1155": {
+      "chainId": 1,
+      "parameters": {
+        "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "zone": "0x0000000000000000000000000000000000000000",
+        "offer": [
+          {
+            "itemType": 1,
+            "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "identifierOrCriteria": "0",
+            "startAmount": "1000000000000000000",
+            "endAmount": "1000000000000000000"
+          }
+        ],
+        "consideration": [
+          {
+            "itemType": 3,
+            "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+            "identifierOrCriteria": "1",
+            "startAmount": "1",
+            "endAmount": "1",
+            "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+          },
+          {
+            "itemType": 1,
+            "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "identifierOrCriteria": "0",
+            "startAmount": "10000000000000000",
+            "endAmount": "10000000000000000",
+            "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+          },
+          {
+            "itemType": 1,
+            "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "identifierOrCriteria": "0",
+            "startAmount": "50000000000000000",
+            "endAmount": "50000000000000000",
+            "recipient": "0x000000000000000000000000000000000000dead"
+          }
+        ],
+        "orderType": 0,
+        "startTime": "1767225600",
+        "endTime": "1798761600",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+        "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "counter": "0",
+        "totalOriginalConsiderationItems": 3
+      },
+      "orderHash": "0x032f1e7c1c58fbac5ef74593c20e2a8b25318667a51370f3630ab70f98313851",
+      "digest": "0x772eb70621c7d2ecf22076571f7e493ad4801e5b6c091521cfb868913147a5d9",
+      "signature": "0x90a64fdfb75eeb1396016be785ca3370caad959d1b49b8b5339457a30bd9fc8b756ed4784a9d4b20304f68502607be80c575e973b6bff3f024a6d59da6fc94a71c",
+      "basicOrderParameters": {
+        "considerationToken": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+        "considerationIdentifier": "1",
+        "considerationAmount": "1",
+        "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "zone": "0x0000000000000000000000000000000000000000",
+        "offerToken": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+        "offerIdentifier": "0",
+        "offerAmount": "1000000000000000000",
+        "basicOrderType": 20,
+        "startTime": "1767225600",
+        "endTime": "1798761600",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+        "offererConduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "fulfillerConduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+        "totalOriginalAdditionalRecipients": 2,
+        "additionalRecipients": [
+          {
+            "amount": "10000000000000000",
+            "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+          },
+          {
+            "amount": "50000000000000000",
+            "recipient": "0x000000000000000000000000000000000000dead"
+          }
+        ],
+        "signature": "0x90a64fdfb75eeb1396016be785ca3370caad959d1b49b8b5339457a30bd9fc8b756ed4784a9d4b20304f68502607be80c575e973b6bff3f024a6d59da6fc94a71c"
+      },
+      "calldata": "0x000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d2837100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb922660000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f5357492222222222222222222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000000000000000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f00000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000024000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000002386f26fc100000000000000000000000000003a1d5441892ea68e7b0dc79ed849a0f5db0b150400000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead000000000000000000000000000000000000000000000000000000000000004190a64fdfb75eeb1396016be785ca3370caad959d1b49b8b5339457a30bd9fc8b756ed4784a9d4b20304f68502607be80c575e973b6bff3f024a6d59da6fc94a71c00000000000000000000000000000000000000000000000000000000000000",
+      "sentCalldata": "0x000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d2837100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb922660000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f5357492222222222222222222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000000000000000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f00000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000024000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000002386f26fc100000000000000000000000000003a1d5441892ea68e7b0dc79ed849a0f5db0b150400000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead000000000000000000000000000000000000000000000000000000000000004190a64fdfb75eeb1396016be785ca3370caad959d1b49b8b5339457a30bd9fc8b756ed4784a9d4b20304f68502607be80c575e973b6bff3f024a6d59da6fc94a71c00000000000000000000000000000000000000000000000000000000000000da32920a",
+      "apechain": {
+        "chainId": 33139,
+        "parameters": {
+          "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+          "zone": "0x0000000000000000000000000000000000000000",
+          "offer": [
+            {
+              "itemType": 1,
+              "token": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+              "identifierOrCriteria": "0",
+              "startAmount": "1000000000000000000",
+              "endAmount": "1000000000000000000"
+            }
+          ],
+          "consideration": [
+            {
+              "itemType": 3,
+              "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+              "identifierOrCriteria": "1",
+              "startAmount": "1",
+              "endAmount": "1",
+              "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+            },
+            {
+              "itemType": 1,
+              "token": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+              "identifierOrCriteria": "0",
+              "startAmount": "10000000000000000",
+              "endAmount": "10000000000000000",
+              "recipient": "0x70a5af9ff16b9c436dbe6c1796930f4e1795abc6"
+            },
+            {
+              "itemType": 1,
+              "token": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+              "identifierOrCriteria": "0",
+              "startAmount": "50000000000000000",
+              "endAmount": "50000000000000000",
+              "recipient": "0x000000000000000000000000000000000000dead"
+            }
+          ],
+          "orderType": 0,
+          "startTime": "1767225600",
+          "endTime": "1798761600",
+          "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+          "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "counter": "0",
+          "totalOriginalConsiderationItems": 3
+        },
+        "orderHash": "0x4a73343a55adde7bbd4e74dd09ed3eb6cefb98fd838ad881abfa0ea026a17986",
+        "digest": "0xcc257b4ca876bc19ca3f0f6471448401266db877c824a4c2078652cc9c21c878",
+        "signature": "0xb4c7056c897b370aa517b39d904fdc4f002099d5d91e5be46e6c5276d2bd5e6364d3ffa2271cf49c3e6625912fb6eb579323d6e250e6e3b9e1c166f9c839e5651c",
+        "basicOrderParameters": {
+          "considerationToken": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+          "considerationIdentifier": "1",
+          "considerationAmount": "1",
+          "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+          "zone": "0x0000000000000000000000000000000000000000",
+          "offerToken": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+          "offerIdentifier": "0",
+          "offerAmount": "1000000000000000000",
+          "basicOrderType": 20,
+          "startTime": "1767225600",
+          "endTime": "1798761600",
+          "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+          "offererConduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "fulfillerConduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+          "totalOriginalAdditionalRecipients": 2,
+          "additionalRecipients": [
+            {
+              "amount": "10000000000000000",
+              "recipient": "0x70a5af9ff16b9c436dbe6c1796930f4e1795abc6"
+            },
+            {
+              "amount": "50000000000000000",
+              "recipient": "0x000000000000000000000000000000000000dead"
+            }
+          ],
+          "signature": "0xb4c7056c897b370aa517b39d904fdc4f002099d5d91e5be46e6c5276d2bd5e6364d3ffa2271cf49c3e6625912fb6eb579323d6e250e6e3b9e1c166f9c839e5651c"
+        },
+        "calldata": "0x000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d2837100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb92266000000000000000000000000000000000000000000000000000000000000000000000000000000000000000048b62137edfa95a428d35c09e44256a739f6b55700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f5357492222222222222222222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000000000000000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f00000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000024000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000002386f26fc1000000000000000000000000000070a5af9ff16b9c436dbe6c1796930f4e1795abc600000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead0000000000000000000000000000000000000000000000000000000000000041b4c7056c897b370aa517b39d904fdc4f002099d5d91e5be46e6c5276d2bd5e6364d3ffa2271cf49c3e6625912fb6eb579323d6e250e6e3b9e1c166f9c839e5651c00000000000000000000000000000000000000000000000000000000000000",
+        "sentCalldata": "0x000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d2837100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb92266000000000000000000000000000000000000000000000000000000000000000000000000000000000000000048b62137edfa95a428d35c09e44256a739f6b55700000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f5357492222222222222222222222222222222222222222222222222222222200000000000000000000000000000000000000000000000000000000000000000000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f00000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000024000000000000000000000000000000000000000000000000000000000000002e00000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000002386f26fc1000000000000000000000000000070a5af9ff16b9c436dbe6c1796930f4e1795abc600000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead0000000000000000000000000000000000000000000000000000000000000041b4c7056c897b370aa517b39d904fdc4f002099d5d91e5be46e6c5276d2bd5e6364d3ffa2271cf49c3e6625912fb6eb579323d6e250e6e3b9e1c166f9c839e5651c00000000000000000000000000000000000000000000000000000000000000da32920a"
+      }
+    },
+    "offerCollection": {
+      "chainId": 1,
+      "parameters": {
+        "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+        "zone": "0x0000000000000000000000000000000000000000",
+        "offer": [
+          {
+            "itemType": 1,
+            "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "identifierOrCriteria": "0",
+            "startAmount": "1000000000000000000",
+            "endAmount": "1000000000000000000"
+          }
+        ],
+        "consideration": [
+          {
+            "itemType": 4,
+            "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+            "identifierOrCriteria": "0",
+            "startAmount": "1",
+            "endAmount": "1",
+            "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+          },
+          {
+            "itemType": 1,
+            "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "identifierOrCriteria": "0",
+            "startAmount": "10000000000000000",
+            "endAmount": "10000000000000000",
+            "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+          },
+          {
+            "itemType": 1,
+            "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "identifierOrCriteria": "0",
+            "startAmount": "50000000000000000",
+            "endAmount": "50000000000000000",
+            "recipient": "0x000000000000000000000000000000000000dead"
+          }
+        ],
+        "orderType": 0,
+        "startTime": "1767225600",
+        "endTime": "1798761600",
+        "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+        "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "counter": "0",
+        "totalOriginalConsiderationItems": 3
+      },
+      "orderHash": "0x17165a9a07688dc2ea2d546097017b757a69a4235dfd48cbea24289695e66506",
+      "digest": "0x7e1c9b95ff630e904cd0e9a662ce8e0d55e7936f27cc6a10e6aadc977aaf8f2f",
+      "signature": "0x1c925abd4faf03cf98e51ae3c074ea8216133e1c481ad26ee1310d9fbe42ed51542856606b19a5f833658f60d42878cc3c7b49bc1acb5f33736f389973e268291c",
+      "apechain": {
+        "chainId": 33139,
+        "parameters": {
+          "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+          "zone": "0x0000000000000000000000000000000000000000",
+          "offer": [
+            {
+              "itemType": 1,
+              "token": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+              "identifierOrCriteria": "0",
+              "startAmount": "1000000000000000000",
+              "endAmount": "1000000000000000000"
+            }
+          ],
+          "consideration": [
+            {
+              "itemType": 4,
+              "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+              "identifierOrCriteria": "0",
+              "startAmount": "1",
+              "endAmount": "1",
+              "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+            },
+            {
+              "itemType": 1,
+              "token": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+              "identifierOrCriteria": "0",
+              "startAmount": "10000000000000000",
+              "endAmount": "10000000000000000",
+              "recipient": "0x70a5af9ff16b9c436dbe6c1796930f4e1795abc6"
+            },
+            {
+              "itemType": 1,
+              "token": "0x48b62137edfa95a428d35c09e44256a739f6b557",
+              "identifierOrCriteria": "0",
+              "startAmount": "50000000000000000",
+              "endAmount": "50000000000000000",
+              "recipient": "0x000000000000000000000000000000000000dead"
+            }
+          ],
+          "orderType": 0,
+          "startTime": "1767225600",
+          "endTime": "1798761600",
+          "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+          "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+          "counter": "0",
+          "totalOriginalConsiderationItems": 3
+        },
+        "orderHash": "0x9ab6e5624a0fb2d56f514b82f94d50eb072273225e431ef43d738b07c76810b8",
+        "digest": "0x9e4130881423a475b60309eea0ff4072aa2ec544c8ea8c7a7075fb4271fcd16c",
+        "signature": "0xab5d26ab2391be1fa96d2ce86920eb9bc4f3820979899aa853d33b6771433f4d29a6981d2ee54d59fd6a2383cae67860f9bf6153b11d95253064a1803629b7f71b"
+      }
+    },
+    "acceptCollection": {
+      "chainId": 1,
+      "bidOrderHash": "0x17165a9a07688dc2ea2d546097017b757a69a4235dfd48cbea24289695e66506",
+      "tokenId": "42",
+      "fulfiller": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+      "amounts": {
+        "offerWei": "1000000000000000000",
+        "feeWei": "10000000000000000",
+        "royaltyWei": "50000000000000000",
+        "sellerNetWei": "940000000000000000"
+      },
+      "mirrorOrderHash": "0x45eda0b89aa3e32139362fef5c3924895442ffd257ee92309738526c3c0cbf5a",
+      "orders": [
+        {
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "1000000000000000000",
+                "endAmount": "1000000000000000000"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 4,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "0",
+                "startAmount": "1",
+                "endAmount": "1",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+            "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "totalOriginalConsiderationItems": 3
+          },
+          "numerator": 1,
+          "denominator": 1,
+          "signature": "0x1c925abd4faf03cf98e51ae3c074ea8216133e1c481ad26ee1310d9fbe42ed51542856606b19a5f833658f60d42878cc3c7b49bc1acb5f33736f389973e268291c",
+          "extraData": "0x"
+        },
+        {
+          "parameters": {
+            "offerer": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 2,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "42",
+                "startAmount": "1",
+                "endAmount": "1"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "940000000000000000",
+                "endAmount": "940000000000000000",
+                "recipient": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1767227400",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965769854917395324362140971968771960044050572744736175661886040970572595",
+            "conduitKey": "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000",
+            "totalOriginalConsiderationItems": 1
+          },
+          "numerator": 1,
+          "denominator": 1,
+          "signature": "0x",
+          "extraData": "0x"
+        }
+      ],
+      "criteriaResolvers": [
+        {
+          "orderIndex": 0,
+          "side": 1,
+          "index": 0,
+          "identifier": "42",
+          "criteriaProof": []
+        }
+      ],
+      "fulfillments": [
+        {
+          "offerComponents": [
+            {
+              "orderIndex": 1,
+              "itemIndex": 0
+            }
+          ],
+          "considerationComponents": [
+            {
+              "orderIndex": 0,
+              "itemIndex": 0
+            }
+          ]
+        },
+        {
+          "offerComponents": [
+            {
+              "orderIndex": 0,
+              "itemIndex": 0
+            }
+          ],
+          "considerationComponents": [
+            {
+              "orderIndex": 1,
+              "itemIndex": 0
+            }
+          ]
+        },
+        {
+          "offerComponents": [
+            {
+              "orderIndex": 0,
+              "itemIndex": 0
+            }
+          ],
+          "considerationComponents": [
+            {
+              "orderIndex": 0,
+              "itemIndex": 1
+            }
+          ]
+        },
+        {
+          "offerComponents": [
+            {
+              "orderIndex": 0,
+              "itemIndex": 0
+            }
+          ],
+          "considerationComponents": [
+            {
+              "orderIndex": 0,
+              "itemIndex": 2
+            }
+          ]
+        }
+      ],
+      "recipient": "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+      "calldata": "0xf2d12b1200000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000a800000000000000000000000000000000000000000000000000000000000000b8000000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c800000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000052000000000000000000000000000000000000000000000000000000000000005a0000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb922660000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016000000000000000000000000000000000000000000000000000000000000002200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f535749222222222222222222222222222222222222222222222222222222220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000de0b6b3a764000000000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000004000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d28371000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb922660000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002386f26fc10000000000000000000000000000000000000000000000000000002386f26fc100000000000000000000000000003a1d5441892ea68e7b0dc79ed849a0f5db0b15040000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b1a2bc2ec5000000000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000000411c925abd4faf03cf98e51ae3c074ea8216133e1c481ad26ee1310d9fbe42ed51542856606b19a5f833658f60d42878cc3c7b49bc1acb5f33736f389973e268291c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000003a000000000000000000000000000000000000000000000000000000000000003c000000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016000000000000000000000000000000000000000000000000000000000000002200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006955c00800000000000000000000000000000000000000000000000000000000000000004f535749333333333333333333333333333333333333333333333333333333330000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d28371000000000000000000000000000000000000000000000000000000000000002a0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000d0b8d0508de00000000000000000000000000000000000000000000000000000d0b8d0508de000000000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002a00000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000018000000000000000000000000000000000000000000000000000000000000002800000000000000000000000000000000000000000000000000000000000000380000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
+      "sentCalldata": "0xf2d12b1200000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000a800000000000000000000000000000000000000000000000000000000000000b8000000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c800000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000052000000000000000000000000000000000000000000000000000000000000005a0000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb922660000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016000000000000000000000000000000000000000000000000000000000000002200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006b36ec8000000000000000000000000000000000000000000000000000000000000000004f535749222222222222222222222222222222222222222222222222222222220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000300000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000de0b6b3a76400000000000000000000000000000000000000000000000000000de0b6b3a764000000000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000004000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d28371000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb922660000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc20000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002386f26fc10000000000000000000000000000000000000000000000000000002386f26fc100000000000000000000000000003a1d5441892ea68e7b0dc79ed849a0f5db0b15040000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b1a2bc2ec5000000000000000000000000000000000000000000000000000000b1a2bc2ec50000000000000000000000000000000000000000000000000000000000000000dead00000000000000000000000000000000000000000000000000000000000000411c925abd4faf03cf98e51ae3c074ea8216133e1c481ad26ee1310d9fbe42ed51542856606b19a5f833658f60d42878cc3c7b49bc1acb5f33736f389973e268291c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000003a000000000000000000000000000000000000000000000000000000000000003c000000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000016000000000000000000000000000000000000000000000000000000000000002200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006955b900000000000000000000000000000000000000000000000000000000006955c00800000000000000000000000000000000000000000000000000000000000000004f535749333333333333333333333333333333333333333333333333333333330000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002000000000000000000000000790b2cf29ed4f310bf7641f013c65d4560d28371000000000000000000000000000000000000000000000000000000000000002a0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000d0b8d0508de00000000000000000000000000000000000000000000000000000d0b8d0508de000000000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002a00000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000018000000000000000000000000000000000000000000000000000000000000002800000000000000000000000000000000000000000000000000000000000000380000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000a0000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002da32920a"
+    },
+    "offerCollectionBulk": {
+      "chainId": 1,
+      "height": 1,
+      "orderCount": 2,
+      "bulkOrderTypehash": "0x3ca2711d29384747a8f61d60aad3c450405f7aaff5613541dee28df2d6986d32",
+      "root": "0x245b88e962ab973eca0d886d175414395cb95c175aa55c459d6aa183532eb93b",
+      "bulkOrderHash": "0xb9fa622b7e88b6f9f7762792be14f7d11702e5403e86ca85a5490db40db3374d",
+      "digest": "0x82e5580b9809f3ada8b2529506b19b3553753064a17748ddb0a44fc0b38dd844",
+      "rootSignature": "0x475113738fcc77691ca4bc711434916808754449b00ff1a12fbd041de5de55a01417fd75c7fa28ffcb12126bb9445b2930c197d7292ddb9a339056f40fbb78c21c",
+      "leaves": [
+        {
+          "index": 0,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "1000000000000000000",
+                "endAmount": "1000000000000000000"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 4,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "0",
+                "startAmount": "1",
+                "endAmount": "1",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889314",
+            "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0x17165a9a07688dc2ea2d546097017b757a69a4235dfd48cbea24289695e66506",
+          "proof": [
+            "0xf1ffb1ca3577d00b9fc4348a6fd0560796174c52ef6d58f5505f62ffe54795c6"
+          ],
+          "signature": "0x475113738fcc77691ca4bc711434916808754449b00ff1a12fbd041de5de55a01417fd75c7fa28ffcb12126bb9445b2930c197d7292ddb9a339056f40fbb78c21c000000f1ffb1ca3577d00b9fc4348a6fd0560796174c52ef6d58f5505f62ffe54795c6"
+        },
+        {
+          "index": 1,
+          "parameters": {
+            "offerer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+            "zone": "0x0000000000000000000000000000000000000000",
+            "offer": [
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "1000000000000000000",
+                "endAmount": "1000000000000000000"
+              }
+            ],
+            "consideration": [
+              {
+                "itemType": 4,
+                "token": "0x790b2cf29ed4f310bf7641f013c65d4560d28371",
+                "identifierOrCriteria": "0",
+                "startAmount": "1",
+                "endAmount": "1",
+                "recipient": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+              },
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "10000000000000000",
+                "endAmount": "10000000000000000",
+                "recipient": "0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504"
+              },
+              {
+                "itemType": 1,
+                "token": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "identifierOrCriteria": "0",
+                "startAmount": "50000000000000000",
+                "endAmount": "50000000000000000",
+                "recipient": "0x000000000000000000000000000000000000dead"
+              }
+            ],
+            "orderType": 0,
+            "startTime": "1767225600",
+            "endTime": "1798761600",
+            "zoneHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "salt": "35879965768057587617514319487994167766158735338996935108006290387300729889315",
+            "conduitKey": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "counter": "0",
+            "totalOriginalConsiderationItems": 3
+          },
+          "orderHash": "0xf1ffb1ca3577d00b9fc4348a6fd0560796174c52ef6d58f5505f62ffe54795c6",
+          "proof": [
+            "0x17165a9a07688dc2ea2d546097017b757a69a4235dfd48cbea24289695e66506"
+          ],
+          "signature": "0x475113738fcc77691ca4bc711434916808754449b00ff1a12fbd041de5de55a01417fd75c7fa28ffcb12126bb9445b2930c197d7292ddb9a339056f40fbb78c21c00000117165a9a07688dc2ea2d546097017b757a69a4235dfd48cbea24289695e66506"
+        }
+      ]
+    }
+  }
+}
