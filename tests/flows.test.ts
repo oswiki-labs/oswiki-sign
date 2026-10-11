@@ -11,6 +11,7 @@ import {
   COLLECTION,
   confirmIdOf,
   ETH,
+  boughtLog,
   fulfilledLog,
   flat,
   harness,
@@ -427,7 +428,7 @@ function setupBuy(h: Harness, value = '1000000000000000000') {
 
 describe('preview_buy + execute', () => {
   it('re-encodes the order locally and sends exactly the order total', async () => {
-    const h = harness({ logsFor: () => [fulfilledLog(vectors.orders.erc721.orderHash as Hex, OTHER_SELLER)] });
+    const h = harness({ logsFor: () => [boughtLog(vectors.orders.erc721.orderHash as Hex, OTHER_SELLER, { token: COLLECTION, identifier: 1n, amount: 1n }, ETH)] });
     setupBuy(h);
     const preview = await h.call('preview_buy', { chainId: 1, askIds: [vectorAskId] });
     expect(preview.isError).toBe(false);

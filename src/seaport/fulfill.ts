@@ -178,10 +178,27 @@ export function revertMessage(err: unknown): string {
   }
 }
 
-export function fulfilledOrderHashes(logs: Log[]): Set<string> {
-  return new Set(parseEventLogs({ abi: SEAPORT_EVENTS_ABI, eventName: 'OrderFulfilled', logs })
-    .filter(log => log.address.toLowerCase() === SEAPORT_ADDRESS)
-    .map(log => log.args.orderHash.toLowerCase()));
+export interface FilledOrder {
+  received: bigint;
+  paid: bigint;
+}
+
+/** Per order hash: units of the expected NFT delivered and the native amount paid, as Seaport executed them. */
+export function filledOrders(logs: Log[], nfts: ReadonlyMap<string, { token: Address; identifier: bigint }>): Map<string, FilledOrder> {
+  const result = new Map<string, FilledOrder>();
+  for (const log of parseEventLogs({ abi: SEAPORT_EVENTS_ABI, eventName: 'OrderFulfilled', logs })) {
+    if (log.address.toLowerCase() !== SEAPORT_ADDRESS) continue;
+    const hash = log.args.orderHash.toLowerCase();
+    const nft = nfts.get(hash);
+    if (!nft) continue;
+    const received = log.args.offer
+      .filter(item => item.token.toLowerCase() === nft.token.toLowerCase() && item.identifier === nft.identifier)
+      .reduce((sum, item) => sum + item.amount, 0n);
+    const paid = log.args.consideration.filter(item => item.itemType === 0).reduce((sum, item) => sum + item.amount, 0n);
+    const prior = result.get(hash);
+    result.set(hash, { received: (prior?.received ?? 0n) + received, paid: (prior?.paid ?? 0n) + paid });
+  }
+  return result;
 }
 
 export function cancelledOrderHashes(logs: Log[]): Set<string> {

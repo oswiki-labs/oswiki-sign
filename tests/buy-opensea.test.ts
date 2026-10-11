@@ -9,7 +9,7 @@ import { OPENSEA_SIGNED_ZONE } from '../src/seaport/opensea.js';
 import { hashOrderComponents } from '../src/seaport/sign.js';
 import calldata from './fixtures/seaport-calldata-vectors.json' with { type: 'json' };
 import vectors from './fixtures/seaport-vectors.json' with { type: 'json' };
-import { COLLECTION, confirmIdOf, ETH, fulfilledLog, harness, OTHER_SELLER, ROYALTY_RECIPIENT, TEST_ADDRESS, type Harness } from './helpers.js';
+import { boughtLog, COLLECTION, confirmIdOf, ETH, harness, OTHER_SELLER, ROYALTY_RECIPIENT, TEST_ADDRESS, type Harness } from './helpers.js';
 
 const NOW_SECONDS = BigInt(Date.parse('2026-10-10T12:00:00Z') / 1000);
 const BUYER = calldata.buyer as Address;
@@ -181,7 +181,7 @@ function setupOswiki(h: Harness) {
 describe('preview_buy + execute for OpenSea listings', () => {
   it('buys an OpenSea listing with our own encoding and the zone authorization passed through', async () => {
     const params = openSeaListing();
-    const h = harness({ logsFor: () => [fulfilledLog(hashOf(params), OTHER_SELLER)] });
+    const h = harness({ logsFor: () => [boughtLog(hashOf(params), OTHER_SELLER, { token: COLLECTION, identifier: 2n, amount: 1n }, ETH)] });
     const askId = setupOpenSea(h, params);
     const preview = await h.call('preview_buy', { chainId: 1, askIds: [askId.toUpperCase().replace('0X', '0x')] });
     expect(preview.isError).toBe(false);
@@ -246,7 +246,7 @@ describe('preview_buy + execute for OpenSea listings', () => {
 
   it('sweeps OSWiki and OpenSea listings together in one transaction', async () => {
     const params = openSeaListing();
-    const h = harness({ logsFor: () => [fulfilledLog(vectors.orders.erc721.orderHash as Hex, OTHER_SELLER), fulfilledLog(hashOf(params), OTHER_SELLER)] });
+    const h = harness({ logsFor: () => [boughtLog(vectors.orders.erc721.orderHash as Hex, OTHER_SELLER, { token: COLLECTION, identifier: 1n, amount: 1n }, ETH), boughtLog(hashOf(params), OTHER_SELLER, { token: COLLECTION, identifier: 2n, amount: 1n }, ETH)] });
     setupOswiki(h);
     const askId = setupOpenSea(h, params);
     const preview = await h.call('preview_buy', { chainId: 1, askIds: [oswikiAskId, askId] });
@@ -262,6 +262,27 @@ describe('preview_buy + execute for OpenSea listings', () => {
     const decoded = decodeFunctionData({ abi: FULFILL_AVAILABLE_ADVANCED_ORDERS_ABI, data: tx.data.slice(0, -8) as Hex });
     const orders = decoded.args[0] as SeaportAdvancedOrder[];
     expect(orders.map(order => order.extraData)).toEqual(['0x', EXTRA]);
+  });
+
+  it('reports how many units of an ERC-1155 listing actually arrived and what was refunded', async () => {
+    const params = partial1155();
+    params.consideration[1] = { ...params.consideration[1]!, recipient: OPENSEA_FEE_RECIPIENT };
+    const paid = (3n * ETH) / 5n;
+    const h = harness({ logsFor: () => [boughtLog(hashOf(params), OTHER_SELLER, { token: COLLECTION, identifier: 1n, amount: 3n }, paid)] });
+    const askId = setupOpenSea(h, params);
+    const preview = await h.call('preview_buy', { chainId: 1, askIds: [askId] });
+    expect(preview.isError).toBe(false);
+    const result = await h.call('execute', { confirmId: confirmIdOf(preview.text) });
+    expect(result.isError).toBe(false);
+    expect(result.text).toContain(`${askId}: bought 3 of 5 (2 were sold to someone else first; the difference of 0.4 ETH was refunded)`);
+  });
+
+  it('says plainly when an order was not filled at all', async () => {
+    const params = openSeaListing();
+    const h = harness({ logsFor: () => [] });
+    const askId = setupOpenSea(h, params);
+    const result = await h.call('execute', { confirmId: confirmIdOf((await h.call('preview_buy', { chainId: 1, askIds: [askId] })).text) });
+    expect(result.text).toContain(`${askId}: NOT filled (1 ETH refunded by Seaport)`);
   });
 
   it('refuses the whole buy when one listing is no longer available', async () => {

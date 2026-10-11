@@ -128,6 +128,18 @@ export function fulfilledLog(orderHash: Hex, offerer: Address, considerationNft?
   }, 0);
 }
 
+/** A listing fill as Seaport logs it: the NFT units delivered and the native amount paid to the seller. */
+export function boughtLog(orderHash: Hex, offerer: Address, nft: { token: Address; identifier: bigint; amount: bigint }, paidWei: bigint) {
+  return log('OrderFulfilled', {
+    orderHash,
+    offerer,
+    zone: '0x0000000000000000000000000000000000000000',
+    recipient: TEST_ADDRESS,
+    offer: [{ itemType: 3, token: nft.token, identifier: nft.identifier, amount: nft.amount }],
+    consideration: [{ itemType: 0, token: '0x0000000000000000000000000000000000000000', identifier: 0n, amount: paidWei, recipient: offerer }],
+  }, 0);
+}
+
 export function makeTransport(chainId: SupportedChainId, state: ChainState, logsFor: LogsFor) {
   const receipts = state.receipts;
   return custom({

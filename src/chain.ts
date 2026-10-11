@@ -33,7 +33,7 @@ import {
   WRAPPED_NATIVE_ABI,
 } from './abi.js';
 import type { Config } from './config.js';
-import { APECHAIN_ID, MAINNET_ID, OPENSEA_CONDUIT_ADDRESS, SEAPORT_ADDRESS, WRAPPED_NATIVE, type SupportedChainId } from './constants.js';
+import { APECHAIN_ID, MAINNET_ID, OPENSEA_CONDUIT_ADDRESS, OPENSEA_CONDUIT_KEY, SEAPORT_ADDRESS, WRAPPED_NATIVE, ZERO_ADDRESS, ZERO_BYTES32, type SupportedChainId } from './constants.js';
 import { native } from './format.js';
 import { revertMessage } from './seaport/fulfill.js';
 import type { PendingTx } from './state.js';
@@ -181,13 +181,34 @@ const WRAPPED_FUNCTIONS_ABI = [...WRAPPED_NATIVE_ABI, ...WRAPPED_TRANSFER_ABI];
 const NFT_FUNCTIONS_ABI = [...NFT_ABI, ...NFT_TRANSFER_ABI];
 const SEAPORT_FUNCTIONS_ABI = [...FULFILL_ADVANCED_ORDER_ABI, ...FULFILL_AVAILABLE_ADVANCED_ORDERS_ABI, ...FULFILL_BASIC_ORDER_ABI, ...MATCH_ADVANCED_ORDERS_ABI, ...SEAPORT_CANCEL_ABI];
 
+/** Whatever a fill delivers must land in this wallet (0x0 = msg.sender); buys never pull through a conduit. */
+function assertFillRecipient(name: string, args: readonly unknown[], wallet: Address | undefined): void {
+  if (name === 'cancel') return;
+  const self = wallet?.toLowerCase();
+  if (self === undefined) throw new TxRefusedError(`${name} without a known wallet`);
+  const isSelf = (value: unknown) => typeof value === 'string' && (value.toLowerCase() === self || value.toLowerCase() === ZERO_ADDRESS);
+  const isKey = (value: unknown, key: string) => typeof value === 'string' && value.toLowerCase() === key;
+  if (name === 'fulfillAdvancedOrder' || name === 'fulfillAvailableAdvancedOrders') {
+    const [conduitKey, recipient] = name === 'fulfillAdvancedOrder' ? [args[2], args[3]] : [args[4], args[5]];
+    if (!isKey(conduitKey, ZERO_BYTES32)) throw new TxRefusedError('a buy must not use a fulfiller conduit');
+    if (!isSelf(recipient)) throw new TxRefusedError('the purchased NFT would go to another wallet');
+    return;
+  }
+  if (name === 'matchAdvancedOrders') {
+    if (!isSelf(args[3])) throw new TxRefusedError('the offer proceeds would go to another wallet');
+    return;
+  }
+  const fulfillerConduitKey = (args[0] as { fulfillerConduitKey?: unknown } | undefined)?.fulfillerConduitKey;
+  if (!isKey(fulfillerConduitKey, ZERO_BYTES32) && !isKey(fulfillerConduitKey, OPENSEA_CONDUIT_KEY)) throw new TxRefusedError('unknown fulfiller conduit');
+}
+
 /**
  * The only transactions this program sends: Seaport fills/cancels (domain-tagged), wrap and an
  * exact (never max) WETH/WAPE approval to Seaport, and setApprovalForAll(OpenSea conduit) on a
  * collection the current plan trades. A send adds value, NFT and WETH/WAPE transfers to its one approved
  * recipient; unwrap returns WETH/WAPE to this wallet.
  */
-export function assertAllowedTx(tx: TxRequest, nftContracts: ReadonlySet<string>, send?: SendTarget): TxShape {
+export function assertAllowedTx(tx: TxRequest, nftContracts: ReadonlySet<string>, send?: SendTarget, wallet?: Address): TxShape {
   const to = tx.to.toLowerCase();
   if (tx.value < 0n) throw new TxRefusedError('negative value');
   const recipient = send?.to.toLowerCase();
@@ -211,6 +232,7 @@ export function assertAllowedTx(tx: TxRequest, nftContracts: ReadonlySet<string>
     const kind = SEAPORT_KIND[name];
     if (!kind) throw new TxRefusedError('unknown Seaport function');
     if (!SEAPORT_PAYABLE.has(name) && tx.value !== 0n) throw new TxRefusedError(`${name} must not carry value`);
+    assertFillRecipient(name, decoded.args as readonly unknown[], wallet);
     const first = (decoded.args as readonly unknown[] | undefined)?.[0];
     const orders = (name === 'fulfillAvailableAdvancedOrders' || name === 'cancel') && Array.isArray(first) ? first.length : 1;
     return { kind, orders };
@@ -353,7 +375,7 @@ export interface SentTx {
 
 /** Allowlist, simulation from the wallet, gas and fee caps, then send and wait; a revert anywhere aborts. */
 export async function sendGuardedTx(chains: Chains, account: PrivateKeyAccount, tx: TxRequest, nftContracts: ReadonlySet<string>, send?: SendTarget): Promise<SentTx> {
-  const shape = assertAllowedTx(tx, nftContracts, send);
+  const shape = assertAllowedTx(tx, nftContracts, send, account.address);
   const client = chains.client(tx.chainId);
   const request = { account: account.address, to: tx.to, data: tx.data, value: tx.value };
   try {

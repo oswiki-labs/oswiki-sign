@@ -1,13 +1,23 @@
-import { createPublicClient, custom, encodeFunctionData, maxUint256, type Hex } from 'viem';
+import { createPublicClient, custom, encodeFunctionData, maxUint256, type Address, type Hex } from 'viem';
 import { mainnet } from 'viem/chains';
 import { describe, expect, it } from 'vitest';
 
-import { NFT_ABI, SEAPORT_CANCEL_ABI, withDomainTag, WRAPPED_NATIVE_ABI } from '../src/abi.js';
+import {
+  encodeBasicOrder,
+  encodeFulfillAdvancedOrder,
+  encodeFulfillAvailableAdvancedOrders,
+  encodeMatchAdvancedOrders,
+  FULFILL_ADVANCED_ORDER_ABI,
+  NFT_ABI,
+  SEAPORT_CANCEL_ABI,
+  withDomainTag,
+  WRAPPED_NATIVE_ABI,
+} from '../src/abi.js';
 import { assertAllowedTx, TxRefusedError } from '../src/chain.js';
-import { OPENSEA_CONDUIT_ADDRESS, OPENSEA_CONDUIT_KEY, SEAPORT_ADDRESS, WRAPPED_NATIVE, ZERO_BYTES32 } from '../src/constants.js';
+import { OPENSEA_CONDUIT_ADDRESS, OPENSEA_CONDUIT_KEY, SEAPORT_ADDRESS, WRAPPED_NATIVE, ZERO_ADDRESS, ZERO_BYTES32 } from '../src/constants.js';
 import { assertOwnListingOrder } from '../src/flows/listing.js';
 import { encodeSeaportCancel } from '../src/seaport/cancel.js';
-import { assertOswikiSeaportOrder, OswikiOrderGuardError } from '../src/seaport/fulfill.js';
+import { assertOswikiSeaportOrder, OswikiOrderGuardError, readAdvancedOrder } from '../src/seaport/fulfill.js';
 import {
   assertSeaportRequirements,
   checkRoyaltyCap,
@@ -198,5 +208,58 @@ describe('transaction allowlist', () => {
     const untagged = encodeFunctionData({ abi: SEAPORT_CANCEL_ABI, functionName: 'cancel', args: [[]] });
     expect(() => assertAllowedTx({ chainId: 1, to: SEAPORT_ADDRESS, data: untagged, value: 0n }, nft)).toThrow(/tag/);
     expect(() => assertAllowedTx({ chainId: 1, to: SEAPORT_ADDRESS, data: withDomainTag(untagged as Hex), value: 5n }, nft)).toThrow(/must not carry value/);
+  });
+});
+
+describe('fill recipient check', () => {
+  const FOREIGN = '0x1111111111111111111111111111111111111111' as Address;
+  const order = readAdvancedOrder({ parameters: vectors.orders.erc721.parameters, signature: vectors.orders.erc721.signature }, (reason) => {
+    throw new Error(reason);
+  });
+  const seaport = (data: Hex, value = ONE_ETH) => ({ chainId: 1 as const, to: SEAPORT_ADDRESS, data, value });
+  const advanced = (conduitKey: Hex, recipient: Address) => withDomainTag(encodeFunctionData({ abi: FULFILL_ADVANCED_ORDER_ABI, functionName: 'fulfillAdvancedOrder', args: [order, [], conduitKey, recipient] }));
+  const basic = (fulfillerConduitKey: Hex) => encodeBasicOrder({
+    considerationToken: COLLECTION,
+    considerationIdentifier: 1n,
+    considerationAmount: 1n,
+    offerer: FOREIGN,
+    zone: ZERO_ADDRESS,
+    offerToken: WRAPPED_NATIVE[1]!,
+    offerIdentifier: 0n,
+    offerAmount: ONE_ETH,
+    basicOrderType: 16,
+    startTime: 0n,
+    endTime: 1n,
+    zoneHash: ZERO_BYTES32,
+    salt: 0n,
+    offererConduitKey: ZERO_BYTES32,
+    fulfillerConduitKey,
+    totalOriginalAdditionalRecipients: 0n,
+    additionalRecipients: [],
+    signature: '0x00',
+  });
+
+  it('allows buys to this wallet or msg.sender', () => {
+    expect(assertAllowedTx(seaport(encodeFulfillAdvancedOrder(order, TEST_ADDRESS)), new Set(), undefined, TEST_ADDRESS)).toEqual({ kind: 'buy', orders: 1 });
+    expect(assertAllowedTx(seaport(encodeFulfillAdvancedOrder(order, ZERO_ADDRESS)), new Set(), undefined, TEST_ADDRESS).kind).toBe('buy');
+    expect(assertAllowedTx(seaport(encodeFulfillAvailableAdvancedOrders([order, order], TEST_ADDRESS)), new Set(), undefined, TEST_ADDRESS)).toEqual({ kind: 'buy', orders: 2 });
+  });
+
+  it('refuses a buy that delivers the NFT to another wallet', () => {
+    expect(() => assertAllowedTx(seaport(encodeFulfillAdvancedOrder(order, FOREIGN)), new Set(), undefined, TEST_ADDRESS)).toThrow(/purchased NFT would go to another wallet/);
+    expect(() => assertAllowedTx(seaport(encodeFulfillAvailableAdvancedOrders([order, order], FOREIGN)), new Set(), undefined, TEST_ADDRESS)).toThrow(/another wallet/);
+  });
+
+  it('refuses a buy through a fulfiller conduit, and any fill without a known wallet', () => {
+    expect(() => assertAllowedTx(seaport(advanced(OPENSEA_CONDUIT_KEY, TEST_ADDRESS)), new Set(), undefined, TEST_ADDRESS)).toThrow(/fulfiller conduit/);
+    expect(() => assertAllowedTx(seaport(encodeFulfillAdvancedOrder(order, TEST_ADDRESS)), new Set())).toThrow(/without a known wallet/);
+  });
+
+  it('checks the accept paths: match proceeds to this wallet, basic orders only through known conduits', () => {
+    expect(assertAllowedTx(seaport(encodeMatchAdvancedOrders([order], [], [], TEST_ADDRESS), 0n), new Set(), undefined, TEST_ADDRESS).kind).toBe('accept');
+    expect(() => assertAllowedTx(seaport(encodeMatchAdvancedOrders([order], [], [], FOREIGN), 0n), new Set(), undefined, TEST_ADDRESS)).toThrow(/proceeds would go to another wallet/);
+    expect(assertAllowedTx(seaport(basic(OPENSEA_CONDUIT_KEY), 0n), new Set(), undefined, TEST_ADDRESS).kind).toBe('accept');
+    expect(assertAllowedTx(seaport(basic(ZERO_BYTES32), 0n), new Set(), undefined, TEST_ADDRESS).kind).toBe('accept');
+    expect(() => assertAllowedTx(seaport(basic(`0x${'ab'.repeat(32)}`), 0n), new Set(), undefined, TEST_ADDRESS)).toThrow(/unknown fulfiller conduit/);
   });
 });

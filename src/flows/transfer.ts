@@ -286,7 +286,7 @@ async function buildGroups(ctx: Ctx, chainId: SupportedChainId, items: NonNullab
 
 interface RecipientFacts {
   isContract: boolean;
-  delegated: boolean;
+  delegate: Address | null;
   fresh: boolean;
   name: string | null;
 }
@@ -301,8 +301,9 @@ async function recipientFacts(ctx: Ctx, chainId: SupportedChainId, recipient: Ad
   ]);
   const hasCode = code !== undefined && code !== '0x' && code.length > 2;
   const delegated = hasCode && code!.toLowerCase().startsWith(EIP7702_PREFIX);
+  const delegate = delegated ? `0x${code!.slice(EIP7702_PREFIX.length).toLowerCase()}` as Address : null;
   if (chainId === APECHAIN_ID && !hasCode) await assertNotEthereumOnlyContract(ctx, recipient);
-  return { isContract: hasCode && !delegated, delegated, fresh: nonce === 0 && balance === 0n && !hasCode, name };
+  return { isContract: hasCode && !delegated, delegate, fresh: nonce === 0 && balance === 0n && !hasCode, name };
 }
 
 async function assertNotEthereumOnlyContract(ctx: Ctx, recipient: Address): Promise<void> {
@@ -354,7 +355,7 @@ function recipientWarnings(plan: TransferPlan, ensInput: string | null, facts: R
   const shown = ensInput ?? facts.name;
   if (shown && isConfusableName(shown)) warnings.push(`⚠ The ENS name ${shown} contains non-ASCII or punycode characters and may imitate another name. Do not trust the name: confirm the full 0x address with the user character by character.`);
   if (facts.isContract) warnings.push(`⚠ The recipient is a CONTRACT on ${CHAIN_NAME[chainId]}, not a plain wallet. Only send if the user knows it is their smart wallet (e.g. a Safe) or a contract that can hand the items on; anything else may be lost for good.`);
-  if (facts.delegated) warnings.push('Note: the recipient is a wallet with an EIP-7702 smart-account delegation.');
+  if (facts.delegate) warnings.push(`⚠ This wallet delegates its code to ${facts.delegate} (EIP-7702). Drained wallets often use 'sweeper' delegations that forward everything they receive - make sure this is the recipient's own wallet.`);
   if (facts.fresh) warnings.push(`⚠ This address has never sent a transaction or held funds on ${CHAIN_NAME[chainId]} - double-check it.`);
   return warnings;
 }

@@ -677,6 +677,17 @@ describe('ApeChain recipients', () => {
     h.world.code.set(FRIEND, `0xef0100${'ab'.repeat(20)}` as Hex);
     expect((await h.call('preview_transfer', { chainId: 33139, to: FRIEND, items: [{ contract: NFT721, tokenId: '1' }] })).isError).toBe(false);
   });
+
+  it('warns and names the delegate when the recipient has an EIP-7702 delegation', async () => {
+    const h = setup();
+    const delegate = `0x${'ab'.repeat(20)}`;
+    h.world.code.set(FRIEND, `0xef0100${'ab'.repeat(20)}` as Hex);
+    const text = await previewOk(h, { chainId: 1, to: FRIEND, items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(text).toContain(`⚠ This wallet delegates its code to ${delegate} (EIP-7702). Drained wallets often use 'sweeper' delegations that forward everything they receive - make sure this is the recipient's own wallet.`);
+    expect(text).not.toMatch(/CONTRACT on Ethereum/);
+    h.world.code.delete(FRIEND);
+    expect(await previewOk(h, { chainId: 1, to: FRIEND, items: [{ contract: NFT721, tokenId: '1' }] })).not.toMatch(/EIP-7702/);
+  });
 });
 
 describe('sent but not confirmed', () => {

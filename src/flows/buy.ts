@@ -6,7 +6,7 @@ import { NATIVE_SYMBOL, SEAPORT_ADDRESS, type SupportedChainId } from '../consta
 import { ApiError } from '../api.js';
 import { native } from '../format.js';
 import { Card, feeValue, feeWarnings, shortHex, type CardPreview } from '../format-card.js';
-import { assertOswikiSeaportOrder, fulfilledOrderHashes, orderHashFromAskId, OswikiOrderGuardError, revertMessage } from '../seaport/fulfill.js';
+import { assertOswikiSeaportOrder, filledOrders, orderHashFromAskId, OswikiOrderGuardError, revertMessage, type FilledOrder } from '../seaport/fulfill.js';
 import { readSeaportCounter } from '../seaport/listing.js';
 import { assertOpenSeaSeaportOrder } from '../seaport/opensea-buy.js';
 import { hashOrderComponents } from '../seaport/sign.js';
@@ -179,6 +179,14 @@ export async function previewBuy(ctx: Ctx, input: { chainId: number; askIds: str
   return { text: card.render(), plan, note };
 }
 
+function fillLine(entry: LoadedOrder, fill: FilledOrder | undefined, chainId: SupportedChainId): string {
+  if (!fill || fill.received === 0n) return `NOT filled (${native(entry.value, chainId)} refunded by Seaport)`;
+  if (fill.received >= entry.quantity) return entry.quantity > 1n ? `bought ${fill.received}` : 'bought';
+  const missing = entry.quantity - fill.received;
+  const refunded = entry.value > fill.paid ? entry.value - fill.paid : 0n;
+  return `bought ${fill.received} of ${entry.quantity} (${missing} ${missing === 1n ? 'was' : 'were'} sold to someone else first; the difference of ${native(refunded, chainId)} was refunded)`;
+}
+
 export async function executeBuy(ctx: Ctx, plan: BuyPlan, commit: () => void): Promise<string> {
   const { chainId } = plan;
   if (plan.wallet !== me(ctx)) throw new GuardError('This plan was made for another wallet.');
@@ -197,8 +205,8 @@ export async function executeBuy(ctx: Ctx, plan: BuyPlan, commit: () => void): P
 
   commit();
   const sent = await txStep([], `Buy for ${native(total, chainId)}`, () => sendGuardedTx(ctx.chains, ctx.account, { chainId, to: SEAPORT_ADDRESS, data: encodeBuy(loaded.map(entry => entry.order), me(ctx)), value: total }, new Set()));
-  const filled = fulfilledOrderHashes(sent.logs);
+  const filled = filledOrders(sent.logs, new Map(loaded.map(entry => [entry.orderHash, { token: entry.contract, identifier: BigInt(entry.tokenId) }])));
   const lines = [`Transaction ${sent.hash} confirmed.`];
-  for (const entry of loaded) lines.push(`- ${entry.askId}: ${filled.has(entry.orderHash) ? 'bought' : 'NOT filled (refunded by Seaport)'}`);
+  for (const entry of loaded) lines.push(`- ${entry.askId}: ${fillLine(entry, filled.get(entry.orderHash), chainId)}`);
   return lines.join('\n');
 }
