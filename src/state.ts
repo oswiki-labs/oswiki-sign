@@ -25,12 +25,14 @@ export interface Charge {
   trades?: number;
   cancels?: number;
   spendWei?: bigint;
+  sendWei?: bigint;
 }
 
 export interface Limits {
   maxTrades: number;
   maxCancels: number;
   dailyMaxWei: Record<SupportedChainId, bigint | null>;
+  dailySendWei?: Record<SupportedChainId, bigint | null>;
 }
 
 export interface Usage {
@@ -38,6 +40,7 @@ export interface Usage {
   trades: number;
   cancels: number;
   spentWei: Record<SupportedChainId, bigint>;
+  sentWei: Record<SupportedChainId, bigint>;
   tampered: boolean;
 }
 
@@ -114,6 +117,10 @@ export class TradeState {
     return this.usage().spentWei[chainId];
   }
 
+  sentToday(chainId: SupportedChainId): bigint {
+    return this.usage().sentWei[chainId];
+  }
+
   remaining(): number {
     return Math.max(0, this.max - this.tradesToday());
   }
@@ -138,7 +145,9 @@ export class TradeState {
       assertWithin(usage, charge, limits);
       const spentWei = { ...usage.spentWei };
       spentWei[charge.chainId] += charge.spendWei ?? 0n;
-      const next: Usage = { day: usage.day, trades: usage.trades + (charge.trades ?? 0), cancels: usage.cancels + (charge.cancels ?? 0), spentWei, tampered: false };
+      const sentWei = { ...usage.sentWei };
+      sentWei[charge.chainId] += charge.sendWei ?? 0n;
+      const next: Usage = { day: usage.day, trades: usage.trades + (charge.trades ?? 0), cancels: usage.cancels + (charge.cancels ?? 0), spentWei, sentWei, tampered: false };
       this.write({ ...next, pending: stored.pending });
       this.memory = next;
     });
@@ -178,26 +187,33 @@ export class TradeState {
   private effective(stored: Stored): Usage {
     const today = this.today();
     const fromFile: Usage = stored.tampered || stored.day === today
-      ? { day: today, trades: stored.trades, cancels: stored.cancels, spentWei: stored.spentWei, tampered: stored.tampered }
-      : { day: today, trades: 0, cancels: 0, spentWei: zeroSpent(), tampered: false };
+      ? { day: today, trades: stored.trades, cancels: stored.cancels, spentWei: stored.spentWei, sentWei: stored.sentWei, tampered: stored.tampered }
+      : { day: today, trades: 0, cancels: 0, spentWei: zeroSpent(), sentWei: zeroSpent(), tampered: false };
     const mem = this.memory?.day === today ? this.memory : null;
     if (!mem) return fromFile;
     const spentWei = zeroSpent();
-    for (const chainId of SUPPORTED_CHAINS) spentWei[chainId] = fromFile.spentWei[chainId] > mem.spentWei[chainId] ? fromFile.spentWei[chainId] : mem.spentWei[chainId];
-    return { day: today, trades: Math.max(fromFile.trades, mem.trades), cancels: Math.max(fromFile.cancels, mem.cancels), spentWei, tampered: fromFile.tampered };
+    const sentWei = zeroSpent();
+    for (const chainId of SUPPORTED_CHAINS) {
+      spentWei[chainId] = fromFile.spentWei[chainId] > mem.spentWei[chainId] ? fromFile.spentWei[chainId] : mem.spentWei[chainId];
+      sentWei[chainId] = fromFile.sentWei[chainId] > mem.sentWei[chainId] ? fromFile.sentWei[chainId] : mem.sentWei[chainId];
+    }
+    return { day: today, trades: Math.max(fromFile.trades, mem.trades), cancels: Math.max(fromFile.cancels, mem.cancels), spentWei, sentWei, tampered: fromFile.tampered };
   }
 
   private mac(body: string): string {
     return createHmac('sha256', this.macKey).update(body).digest('hex');
   }
 
+  /** "sent" is written only once something was sent, so files from before sends existed keep verifying. */
   private body(state: Stored): string {
+    const anySent = SUPPORTED_CHAINS.some(chainId => state.sentWei[chainId] > 0n);
     return JSON.stringify({
       v: STATE_VERSION,
       day: state.day,
       trades: state.trades,
       cancels: state.cancels,
       spent: Object.fromEntries(SUPPORTED_CHAINS.map(chainId => [String(chainId), state.spentWei[chainId].toString()])),
+      ...(anySent ? { sent: Object.fromEntries(SUPPORTED_CHAINS.map(chainId => [String(chainId), state.sentWei[chainId].toString()])) } : {}),
       pending: state.pending.map(entry => ({ chainId: entry.chainId, hash: entry.hash, nonce: entry.nonce, label: entry.label, sentAt: entry.sentAt })),
     });
   }
@@ -209,7 +225,7 @@ export class TradeState {
 
   private tampered(): Stored {
     const max = BigInt(Number.MAX_SAFE_INTEGER) * 10n ** 18n;
-    return { day: this.today(), trades: Number.MAX_SAFE_INTEGER, cancels: Number.MAX_SAFE_INTEGER, spentWei: { [MAINNET_ID]: max, [APECHAIN_ID]: max }, tampered: true, pending: [] };
+    return { day: this.today(), trades: Number.MAX_SAFE_INTEGER, cancels: Number.MAX_SAFE_INTEGER, spentWei: { [MAINNET_ID]: max, [APECHAIN_ID]: max }, sentWei: { [MAINNET_ID]: max, [APECHAIN_ID]: max }, tampered: true, pending: [] };
   }
 
   private read(): Stored {
@@ -217,7 +233,7 @@ export class TradeState {
     try {
       raw = readFileSync(this.file, 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { day: '', trades: 0, cancels: 0, spentWei: zeroSpent(), tampered: false, pending: [] };
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { day: '', trades: 0, cancels: 0, spentWei: zeroSpent(), sentWei: zeroSpent(), tampered: false, pending: [] };
       return this.tampered();
     }
     let parsed: Record<string, unknown>;
@@ -227,17 +243,20 @@ export class TradeState {
       return this.tampered();
     }
     const spent = parsed.spent as Record<string, unknown> | undefined;
+    const sent = parsed.sent as Record<string, unknown> | null | undefined;
+    const weiMap = (map: Record<string, unknown> | null | undefined) => map !== null && typeof map === 'object' && SUPPORTED_CHAINS.every(chainId => typeof map[String(chainId)] === 'string' && WEI_RE.test(map[String(chainId)] as string));
     if (
       parsed === null || typeof parsed !== 'object' || parsed.v !== STATE_VERSION || typeof parsed.day !== 'string'
       || !isCount(parsed.trades) || !isCount(parsed.cancels) || typeof parsed.mac !== 'string'
-      || spent === null || typeof spent !== 'object' || !SUPPORTED_CHAINS.every(chainId => typeof spent[String(chainId)] === 'string' && WEI_RE.test(spent[String(chainId)] as string))
+      || !weiMap(spent) || (sent !== undefined && !weiMap(sent))
       || !Array.isArray(parsed.pending) || !parsed.pending.every(isPending)
     ) return this.tampered();
     const state: Stored = {
       day: parsed.day,
       trades: parsed.trades,
       cancels: parsed.cancels,
-      spentWei: { [MAINNET_ID]: BigInt(spent[String(MAINNET_ID)] as string), [APECHAIN_ID]: BigInt(spent[String(APECHAIN_ID)] as string) },
+      spentWei: { [MAINNET_ID]: BigInt(spent![String(MAINNET_ID)] as string), [APECHAIN_ID]: BigInt(spent![String(APECHAIN_ID)] as string) },
+      sentWei: sent ? { [MAINNET_ID]: BigInt(sent[String(MAINNET_ID)] as string), [APECHAIN_ID]: BigInt(sent[String(APECHAIN_ID)] as string) } : zeroSpent(),
       tampered: false,
       pending: parsed.pending as PendingTx[],
     };
@@ -310,6 +329,16 @@ function assertWithin(usage: Usage, charge: Charge, limits: Limits): void {
     const spent = usage.spentWei[charge.chainId];
     if (spent + spend > cap) {
       throw new DailyCapError(`Daily spend limit on ${CHAIN_NAME[charge.chainId]}: ${native(spent, charge.chainId)} used today plus ${native(spend, charge.chainId)} would exceed ${native(cap, charge.chainId)} (${variable}; buys and new offers count).`);
+    }
+  }
+  const send = charge.sendWei ?? 0n;
+  if (send > 0n) {
+    const cap = limits.dailySendWei?.[charge.chainId] ?? null;
+    const variable = `OSWIKI_DAILY_MAX_SEND_${NATIVE_SYMBOL[charge.chainId]}`;
+    if (cap === null) throw new DailyCapError(`Sending funds on ${CHAIN_NAME[charge.chainId]} is off until a daily send limit is set (${variable}).`);
+    const sent = usage.sentWei[charge.chainId];
+    if (sent + send > cap) {
+      throw new DailyCapError(`Daily send limit on ${CHAIN_NAME[charge.chainId]}: ${native(sent, charge.chainId)} sent today plus ${native(send, charge.chainId)} would exceed ${native(cap, charge.chainId)} (${variable}; native and wrapped sends count).`);
     }
   }
 }

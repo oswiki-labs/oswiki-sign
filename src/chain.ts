@@ -31,6 +31,7 @@ import { APECHAIN_ID, MAINNET_ID, OPENSEA_CONDUIT_ADDRESS, SEAPORT_ADDRESS, WRAP
 import { native } from './format.js';
 import { revertMessage } from './seaport/fulfill.js';
 import type { PendingTx } from './state.js';
+import { NFT_TRANSFER_ABI, WRAPPED_TRANSFER_ABI } from './transfer-abi.js';
 
 const CHAINS: Record<SupportedChainId, Chain> = { [MAINNET_ID]: mainnet, [APECHAIN_ID]: apeChain };
 
@@ -87,15 +88,49 @@ export interface TxRequest {
   value: bigint;
 }
 
-export type TxKind = 'approve' | 'setApprovalForAll' | 'wrap' | 'cancel' | 'buy' | 'accept';
+export type TxKind = 'approve' | 'setApprovalForAll' | 'wrap' | 'cancel' | 'buy' | 'accept' | 'transfer721' | 'transfer1155' | 'transfer1155Batch' | 'send' | 'erc20Transfer' | 'unwrap';
+
+/** The one recipient a send may name; transfer calldata from or to anyone else is refused. */
+export interface SendTarget {
+  from: Address;
+  to: Address;
+}
 
 export interface TxShape {
   kind: TxKind;
   orders: number;
 }
 
-const GAS_BASE: Record<TxKind, bigint> = { approve: 100_000n, setApprovalForAll: 120_000n, wrap: 80_000n, cancel: 60_000n, buy: 300_000n, accept: 400_000n };
-const GAS_PER_ORDER: Record<TxKind, bigint> = { approve: 0n, setApprovalForAll: 0n, wrap: 0n, cancel: 40_000n, buy: 150_000n, accept: 0n };
+const GAS_BASE: Record<TxKind, bigint> = {
+  approve: 100_000n,
+  setApprovalForAll: 120_000n,
+  wrap: 80_000n,
+  cancel: 60_000n,
+  buy: 300_000n,
+  accept: 400_000n,
+  transfer721: 90_000n,
+  transfer1155: 80_000n,
+  transfer1155Batch: 60_000n,
+  send: 21_000n,
+  erc20Transfer: 70_000n,
+  unwrap: 50_000n,
+};
+const GAS_PER_ORDER: Record<TxKind, bigint> = {
+  approve: 0n,
+  setApprovalForAll: 0n,
+  wrap: 0n,
+  cancel: 40_000n,
+  buy: 150_000n,
+  accept: 0n,
+  transfer721: 0n,
+  transfer1155: 0n,
+  transfer1155Batch: 40_000n,
+  send: 0n,
+  erc20Transfer: 0n,
+  unwrap: 0n,
+};
+// ApeChain gas estimates include the parent-chain data cost, so a plain value transfer costs more than 21000 there.
+const GAS_CHAIN_OVERRIDE: Record<SupportedChainId, Partial<Record<TxKind, bigint>>> = { [MAINNET_ID]: {}, [APECHAIN_ID]: { send: 150_000n } };
 const GAS_CHAIN_FACTOR: Record<SupportedChainId, bigint> = { [MAINNET_ID]: 1n, [APECHAIN_ID]: 2n };
 const MAX_PRIORITY_FEE: Record<SupportedChainId, bigint | null> = { [MAINNET_ID]: 10_000_000_000n, [APECHAIN_ID]: null };
 export const MAX_GWEI_VARIABLE: Record<SupportedChainId, string> = { [MAINNET_ID]: 'OSWIKI_MAX_GWEI', [APECHAIN_ID]: 'OSWIKI_MAX_GWEI_APECHAIN' };
@@ -103,6 +138,8 @@ export const PENDING_GRACE_MS = 30 * 60_000;
 export const RECEIPT_TIMEOUT_MS = 180_000;
 
 export function gasLimitCap(chainId: SupportedChainId, shape: TxShape): bigint {
+  const override = GAS_CHAIN_OVERRIDE[chainId][shape.kind];
+  if (override !== undefined) return override;
   return (GAS_BASE[shape.kind] + GAS_PER_ORDER[shape.kind] * BigInt(Math.max(1, shape.orders))) * GAS_CHAIN_FACTOR[chainId];
 }
 
@@ -114,16 +151,27 @@ const SEAPORT_KIND: Record<string, TxKind> = {
   cancel: 'cancel',
 };
 const SEAPORT_PAYABLE = new Set(['fulfillAdvancedOrder', 'fulfillAvailableAdvancedOrders']);
+const WRAPPED_FUNCTIONS_ABI = [...WRAPPED_NATIVE_ABI, ...WRAPPED_TRANSFER_ABI];
+const NFT_FUNCTIONS_ABI = [...NFT_ABI, ...NFT_TRANSFER_ABI];
 const SEAPORT_FUNCTIONS_ABI = [...FULFILL_ADVANCED_ORDER_ABI, ...FULFILL_AVAILABLE_ADVANCED_ORDERS_ABI, ...FULFILL_BASIC_ORDER_ABI, ...MATCH_ADVANCED_ORDERS_ABI, ...SEAPORT_CANCEL_ABI];
 
 /**
  * The only transactions this program sends: Seaport fills/cancels (domain-tagged), wrap and an
  * exact (never max) WETH/WAPE approval to Seaport, and setApprovalForAll(OpenSea conduit) on a
- * collection the current plan trades.
+ * collection the current plan trades. A send adds value, NFT and WETH/WAPE transfers to its one approved
+ * recipient; unwrap returns WETH/WAPE to this wallet.
  */
-export function assertAllowedTx(tx: TxRequest, nftContracts: ReadonlySet<string>): TxShape {
+export function assertAllowedTx(tx: TxRequest, nftContracts: ReadonlySet<string>, send?: SendTarget): TxShape {
   const to = tx.to.toLowerCase();
   if (tx.value < 0n) throw new TxRefusedError('negative value');
+  const recipient = send?.to.toLowerCase();
+  const same = (value: unknown, expected: string | undefined) => typeof value === 'string' && expected !== undefined && value.toLowerCase() === expected;
+
+  if (tx.data === '0x') {
+    if (recipient === undefined || to !== recipient) throw new TxRefusedError('plain value transfer to an address that is not the approved recipient');
+    if (tx.value <= 0n) throw new TxRefusedError('send without value');
+    return { kind: 'send', orders: 1 };
+  }
 
   if (to === SEAPORT_ADDRESS) {
     if (!tx.data.toLowerCase().endsWith(OSWIKI_DOMAIN_TAG.slice(2))) throw new TxRefusedError('Seaport calldata without the OSWiki tag');
@@ -145,9 +193,18 @@ export function assertAllowedTx(tx: TxRequest, nftContracts: ReadonlySet<string>
   if (to === WRAPPED_NATIVE[tx.chainId]) {
     let decoded;
     try {
-      decoded = decodeFunctionData({ abi: WRAPPED_NATIVE_ABI, data: tx.data });
+      decoded = decodeFunctionData({ abi: WRAPPED_FUNCTIONS_ABI, data: tx.data });
     } catch {
       throw new TxRefusedError('unknown wrapped-token function');
+    }
+    if (decoded.functionName === 'withdraw') {
+      if (tx.value !== 0n) throw new TxRefusedError('withdraw must not carry value');
+      return { kind: 'unwrap', orders: 1 };
+    }
+    if (decoded.functionName === 'transfer') {
+      if (!same(decoded.args[0], recipient)) throw new TxRefusedError('token transfer to an address that is not the approved recipient');
+      if (tx.value !== 0n) throw new TxRefusedError('transfer must not carry value');
+      return { kind: 'erc20Transfer', orders: 1 };
     }
     if (decoded.functionName === 'deposit') {
       if (tx.value <= 0n) throw new TxRefusedError('wrap without value');
@@ -166,9 +223,17 @@ export function assertAllowedTx(tx: TxRequest, nftContracts: ReadonlySet<string>
   if (nftContracts.has(to)) {
     let decoded;
     try {
-      decoded = decodeFunctionData({ abi: NFT_ABI, data: tx.data });
+      decoded = decodeFunctionData({ abi: NFT_FUNCTIONS_ABI, data: tx.data });
     } catch {
       throw new TxRefusedError('unknown collection function');
+    }
+    if (decoded.functionName === 'safeTransferFrom' || decoded.functionName === 'safeBatchTransferFrom') {
+      const args = decoded.args as readonly unknown[];
+      if (!same(args[0], send?.from.toLowerCase())) throw new TxRefusedError('NFT transfer from another wallet');
+      if (!same(args[1], recipient)) throw new TxRefusedError('NFT transfer to an address that is not the approved recipient');
+      if (tx.value !== 0n) throw new TxRefusedError('NFT transfer must not carry value');
+      if (decoded.functionName === 'safeBatchTransferFrom') return { kind: 'transfer1155Batch', orders: (args[2] as readonly bigint[]).length };
+      return { kind: args.length === 3 ? 'transfer721' : 'transfer1155', orders: 1 };
     }
     if (decoded.functionName !== 'setApprovalForAll') throw new TxRefusedError(`${decoded.functionName} is not allowed`);
     const [operator, approved] = decoded.args as readonly [Address, boolean];
@@ -261,8 +326,8 @@ export interface SentTx {
 }
 
 /** Allowlist, simulation from the wallet, gas and fee caps, then send and wait; a revert anywhere aborts. */
-export async function sendGuardedTx(chains: Chains, account: PrivateKeyAccount, tx: TxRequest, nftContracts: ReadonlySet<string>): Promise<SentTx> {
-  const shape = assertAllowedTx(tx, nftContracts);
+export async function sendGuardedTx(chains: Chains, account: PrivateKeyAccount, tx: TxRequest, nftContracts: ReadonlySet<string>, send?: SendTarget): Promise<SentTx> {
+  const shape = assertAllowedTx(tx, nftContracts, send);
   const client = chains.client(tx.chainId);
   const request = { account: account.address, to: tx.to, data: tx.data, value: tx.value };
   try {

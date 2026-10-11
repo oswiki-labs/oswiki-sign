@@ -20,6 +20,8 @@ export interface LimitsInput {
   maxBuyApe?: Amount | null;
   dailyMaxEth?: Amount;
   dailyMaxApe?: Amount;
+  dailyMaxSendEth?: Amount;
+  dailyMaxSendApe?: Amount;
   minListFloorPct?: number;
   maxTradesPerDay?: number;
   maxCancelsPerDay?: number;
@@ -65,6 +67,8 @@ export function nextOverrides(current: Overrides, config: Config, input: LimitsI
   set('OSWIKI_MAX_BUY_APE', text(input.maxBuyApe));
   set('OSWIKI_DAILY_MAX_ETH', text(input.dailyMaxEth));
   set('OSWIKI_DAILY_MAX_APE', text(input.dailyMaxApe));
+  set('OSWIKI_DAILY_MAX_SEND_ETH', text(input.dailyMaxSendEth));
+  set('OSWIKI_DAILY_MAX_SEND_APE', text(input.dailyMaxSendApe));
   set('OSWIKI_MIN_LIST_FLOOR_PCT', input.minListFloorPct === undefined ? undefined : String(input.minListFloorPct));
   set('OSWIKI_MAX_TRADES_PER_DAY', input.maxTradesPerDay === undefined ? undefined : String(input.maxTradesPerDay));
   set('OSWIKI_MAX_CANCELS_PER_DAY', input.maxCancelsPerDay === undefined ? undefined : String(input.maxCancelsPerDay));

@@ -124,7 +124,7 @@ describe('confirm store', () => {
 describe('tool definitions', () => {
   it('exposes the planned tools with strict schemas and the confirmation flow', () => {
     const tools = toolDefinitions();
-    expect(tools.map(tool => tool.name)).toEqual(['wallet_status', 'my_listings', 'my_offers', 'preview_listing', 'preview_buy', 'preview_cancel', 'preview_offer', 'preview_accept_offer', 'execute', 'update_limits']);
+    expect(tools.map(tool => tool.name)).toEqual(['wallet_status', 'my_listings', 'my_offers', 'preview_listing', 'preview_buy', 'preview_cancel', 'preview_offer', 'preview_accept_offer', 'preview_transfer', 'preview_unwrap', 'execute', 'update_limits']);
     for (const tool of tools) expect(tool.inputSchema.additionalProperties).toBe(false);
     const listing = tools.find(tool => tool.name === 'preview_listing')!;
     expect(listing.description).toMatch(/do NOT guess, do NOT use 0/);

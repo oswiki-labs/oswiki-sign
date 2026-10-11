@@ -19,6 +19,7 @@ export interface Config {
   apiKey: string | null;
   maxBuyWei: Record<SupportedChainId, bigint | null>;
   dailyMaxWei: Record<SupportedChainId, bigint | null>;
+  dailyMaxSendWei: Record<SupportedChainId, bigint | null>;
   minListFloorPct: number;
   maxTradesPerDay: number;
   maxCancelsPerDay: number;
@@ -102,6 +103,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     [APECHAIN_ID]: readCap(env.OSWIKI_MAX_BUY_APE, 'OSWIKI_MAX_BUY_APE'),
   };
   const dailyMax = (value: string | undefined, name: string, perTrade: bigint | null) => readCap(value, name) ?? (perTrade === null ? null : perTrade * 3n);
+  const dailyMaxWei: Record<SupportedChainId, bigint | null> = {
+    [MAINNET_ID]: dailyMax(env.OSWIKI_DAILY_MAX_ETH, 'OSWIKI_DAILY_MAX_ETH', maxBuyWei[MAINNET_ID]),
+    [APECHAIN_ID]: dailyMax(env.OSWIKI_DAILY_MAX_APE, 'OSWIKI_DAILY_MAX_APE', maxBuyWei[APECHAIN_ID]),
+  };
 
   return {
     rpc: {
@@ -110,9 +115,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     },
     apiKey: apiKey ? apiKey : null,
     maxBuyWei,
-    dailyMaxWei: {
-      [MAINNET_ID]: dailyMax(env.OSWIKI_DAILY_MAX_ETH, 'OSWIKI_DAILY_MAX_ETH', maxBuyWei[MAINNET_ID]),
-      [APECHAIN_ID]: dailyMax(env.OSWIKI_DAILY_MAX_APE, 'OSWIKI_DAILY_MAX_APE', maxBuyWei[APECHAIN_ID]),
+    dailyMaxWei,
+    dailyMaxSendWei: {
+      [MAINNET_ID]: readCap(env.OSWIKI_DAILY_MAX_SEND_ETH, 'OSWIKI_DAILY_MAX_SEND_ETH') ?? dailyMaxWei[MAINNET_ID],
+      [APECHAIN_ID]: readCap(env.OSWIKI_DAILY_MAX_SEND_APE, 'OSWIKI_DAILY_MAX_SEND_APE') ?? dailyMaxWei[APECHAIN_ID],
     },
     minListFloorPct: readInt(env.OSWIKI_MIN_LIST_FLOOR_PCT, 50, 'OSWIKI_MIN_LIST_FLOOR_PCT', 0, 100),
     maxTradesPerDay: readInt(env.OSWIKI_MAX_TRADES_PER_DAY, 50, 'OSWIKI_MAX_TRADES_PER_DAY', 0, 100000),

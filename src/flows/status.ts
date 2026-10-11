@@ -33,6 +33,10 @@ export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overri
     const value = config.dailyMaxWei[chainId];
     return value === null ? 'NOT SET' : `${native(ctx.state.spentToday(chainId), chainId)} of ${native(value, chainId)} used`;
   };
+  const sent = (chainId: SupportedChainId) => {
+    const value = config.dailyMaxSendWei[chainId];
+    return value === null ? 'NOT SET, sending off' : `${native(ctx.state.sentToday(chainId), chainId)} of ${native(value, chainId)} used`;
+  };
   const pending = ctx.state.pendingTxs();
   return [
     `Wallet ${address.toLowerCase()}`,
@@ -44,6 +48,7 @@ export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overri
     `- trades today: ${ctx.state.tradesToday()} of ${config.maxTradesPerDay} (OSWIKI_MAX_TRADES_PER_DAY; each item counts)`,
     `- cancels today: ${ctx.state.cancelsToday()} of ${config.maxCancelsPerDay} (OSWIKI_MAX_CANCELS_PER_DAY)`,
     `- spent today on buys and new offers: ${daily(MAINNET_ID)} on Ethereum (OSWIKI_DAILY_MAX_ETH), ${daily(APECHAIN_ID)} on ApeChain (OSWIKI_DAILY_MAX_APE)`,
+    `- sent today (native + wrapped, sends always need the dialog): ${sent(MAINNET_ID)} on Ethereum (OSWIKI_DAILY_MAX_SEND_ETH), ${sent(APECHAIN_ID)} on ApeChain (OSWIKI_DAILY_MAX_SEND_APE); every sent NFT counts as a trade`,
     '- the daily counts are kept only on this computer, in the state files in OSWIKI_SIGN_STATE_DIR (default ~/.oswiki-sign); deleting those files resets them. They stop mistakes and a misbehaving AI, not someone with access to this computer.',
     `- max network fee: ${formatUnits(config.maxFeePerGasWei[MAINNET_ID], 9)} gwei on Ethereum (OSWIKI_MAX_GWEI), ${formatUnits(config.maxFeePerGasWei[APECHAIN_ID], 9)} gwei on ApeChain (OSWIKI_MAX_GWEI_APECHAIN)`,
     ctx.state.isTampered() ? '- STATE FILE FAILED ITS INTEGRITY CHECK: every daily limit counts as used. Delete ~/.oswiki-sign/state.json only if the wallet key changed.' : '',
@@ -73,6 +78,8 @@ export function settingValues(config: Config): Array<[string, string]> {
     ['OSWIKI_MAX_BUY_APE', amount(config.maxBuyWei[APECHAIN_ID], 'buys and offers off on ApeChain')],
     ['OSWIKI_DAILY_MAX_ETH', amount(config.dailyMaxWei[MAINNET_ID], 'no daily cap')],
     ['OSWIKI_DAILY_MAX_APE', amount(config.dailyMaxWei[APECHAIN_ID], 'no daily cap')],
+    ['OSWIKI_DAILY_MAX_SEND_ETH', amount(config.dailyMaxSendWei[MAINNET_ID], 'sending ETH/WETH off')],
+    ['OSWIKI_DAILY_MAX_SEND_APE', amount(config.dailyMaxSendWei[APECHAIN_ID], 'sending APE/WAPE off')],
     ['OSWIKI_MIN_LIST_FLOOR_PCT', String(config.minListFloorPct)],
     ['OSWIKI_MAX_TRADES_PER_DAY', String(config.maxTradesPerDay)],
     ['OSWIKI_MAX_CANCELS_PER_DAY', String(config.maxCancelsPerDay)],

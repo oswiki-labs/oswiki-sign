@@ -26,13 +26,13 @@ Every file it changes is backed up first (`<file>.bak-<time>`), other MCP server
 2. You read the preview and tell the AI to go ahead.
 3. The AI calls `execute` with the `confirmId` from that preview. oswiki-sign re-checks the counter, ownership and a simulation, then signs and sends exactly what was previewed. A `confirmId` works once and expires after 10 minutes.
 
-Tools: `wallet_status`, `my_listings`, `my_offers`, `preview_listing`, `preview_buy`, `preview_cancel`, `preview_offer`, `preview_accept_offer`, `execute`, `update_limits`.
+Tools: `wallet_status`, `my_listings`, `my_offers`, `preview_listing`, `preview_buy`, `preview_cancel`, `preview_offer`, `preview_accept_offer`, `preview_transfer`, `preview_unwrap`, `execute`, `update_limits`.
 
 `wallet_status` lists every setting with its exact env name, current value and source (setup/env or chat), and how to change it.
 
 ### Changing limits from the chat
 
-`update_limits` changes the per-buy and daily caps, the floor guard, trades and cancels per day, dry run, the confirmation mode and the collection allow/block lists (`0x` addresses only). Every change, tighter or looser, is shown to you as old -> new in oswiki-sign's own dialog and applies only after you approve it there, in every confirmation mode. It then takes effect at once, no restart. Clients that cannot show the dialog cannot change settings this way; run setup again instead.
+`update_limits` changes the per-buy, daily and daily send caps, the floor guard, trades and cancels per day, dry run, the confirmation mode and the collection allow/block lists (`0x` addresses only). Every change, tighter or looser, is shown to you as old -> new in oswiki-sign's own dialog and applies only after you approve it there, in every confirmation mode. It then takes effect at once, no restart. Clients that cannot show the dialog cannot change settings this way; run setup again instead.
 
 Approved changes are saved in `~/.oswiki-sign/settings.json`, signed with a key derived from your wallet key, and win over the setup/env values. A file that fails that check (edited by hand, or from another wallet) is ignored with a warning. Re-running setup shows the chat changes and offers to reset them.
 
@@ -43,6 +43,17 @@ Approved changes are saved in `~/.oswiki-sign/settings.json`, signed with a key 
 When the AI calls `execute`, oswiki-sign itself opens a confirmation dialog in your client showing the exact trade. Only ticking "Sign and send this trade" sends it; the AI cannot answer this dialog. Claude Code shows the dialog automatically. If your client cannot show it, trades are refused unless you set `OSWIKI_CONFIRM_MODE=ai` (less safe: the AI's word then counts as your confirmation).
 
 `OSWIKI_CONFIRM_MODE=off` switches the dialog off on purpose, so the AI can trade on its own: for trades you asked for, or under a standing instruction such as "buy any Gimboz under 2,500 APE". The AI is told it may execute when you asked for the trade or a standing instruction covers it, must stay within the limits and must report every executed trade. Be honest with yourself about what this means: nothing stops a trade except your limits. A manipulated listing name, web page or message that the AI reads could make it trade, up to your per-buy, daily and trade-count limits, in the collections you allow. oswiki-sign says so at startup, in `wallet_status` and under every preview. All other limits stay exactly as you set them. Use it only with a small wallet, tight limits and, ideally, an allowlist.
+
+### Sending NFTs and funds
+
+`preview_transfer` sends NFTs and funds from the trading wallet to one other wallet on one chain, in one approval: any number of NFTs (up to 50; ERC-721, and ERC-1155 with an amount), ETH/APE and WETH/WAPE. ERC-721 tokens go one `safeTransferFrom` each, ERC-1155 ids of one contract go in one `safeBatchTransferFrom` (or `safeTransferFrom` for a single id); the transactions are sent one after another with the usual pending-transaction safety.
+
+- **Always your approval.** Every send is shown to you in oswiki-sign's own dialog (chain, every item and amount, the full recipient address, its ENS name and any warnings) and only goes out when you approve it there. This holds in every confirmation mode, also with `OSWIKI_CONFIRM_MODE=off` or `ai`. Clients that cannot show the dialog cannot send; send from your wallet app instead. The AI is told to send only to an address or ENS name you gave it yourself.
+- **Recipient checks.** The recipient is a full `0x` address or an ENS name (resolved on Ethereum, the preview shows the address it resolves to). The zero and burn addresses, the token's own contract, the WETH/WAPE contract, marketplace contracts and the wallet itself are refused. A contract recipient gets a loud warning, an address that has never been used gets a note.
+- **Checked on-chain first.** Ownership (`ownerOf` / `balanceOf`) and balances are read from the chain, and every transfer is simulated. When a collection does not let you send a token (for example ERC721-C transfer rules), or the simulation reverts, the preview names each item it affects instead of sending the rest silently.
+- **Limits.** Sent ETH plus WETH (APE plus WAPE) count toward `OSWIKI_DAILY_MAX_SEND_ETH` / `OSWIKI_DAILY_MAX_SEND_APE`; every sent NFT counts as one trade toward `OSWIKI_MAX_TRADES_PER_DAY`; `OSWIKI_BLOCKED_COLLECTIONS` and `OSWIKI_ALLOWED_COLLECTIONS` apply. Gas limit caps per transaction: 90k (ERC-721), 80k (one ERC-1155 id), 60k + 40k per id (ERC-1155 batch), 70k (WETH/WAPE), 21k for ETH on Ethereum (so plain ETH to a contract wallet is refused: send WETH instead), 150k for APE on ApeChain.
+
+`preview_unwrap` turns WETH/WAPE back into ETH/APE in the same wallet (`withdraw`). Nothing leaves the wallet, so it follows the normal confirmation mode.
 
 ### Royalties
 
@@ -182,7 +193,7 @@ Every release is built and published by the [release workflow](.github/workflows
 | `OSWIKI_MAX_BUY_ETH` | required for buys/offers | Most one buy or offer may spend on Ethereum, in ETH. Without it, buying and offers on Ethereum are off (listing and cancelling still work). |
 | `OSWIKI_MAX_BUY_APE` | required for buys/offers | Same on ApeChain, in APE. |
 | `OSWIKI_MIN_LIST_FLOOR_PCT` | 50 | Listings and accepted offers below this % of the collection floor are refused. The floor is the collection floor across all marketplaces (for Otherdeed the lower of its two contracts), cross-checked against the cheapest active listing on any marketplace. `0` turns it off. |
-| `OSWIKI_MAX_TRADES_PER_DAY` | 50 | Listed, bought, offered and accepted items per UTC day (every item of a bulk execute counts). Counted in `~/.oswiki-sign/state.json`. |
+| `OSWIKI_MAX_TRADES_PER_DAY` | 50 | Listed, bought, offered, accepted and sent items per UTC day (every item of a bulk execute counts). Counted in `~/.oswiki-sign/state.json`. |
 | `OSWIKI_ALLOWED_COLLECTIONS` | any | Comma-separated collection addresses; everything else is refused. See [Otherdeed](#otherdeed-has-two-contracts). |
 | `OSWIKI_BLOCKED_COLLECTIONS` | none | Comma-separated collection addresses; listing, buying, offers and accepting offers on them are refused in every confirmation mode. Cancelling always works. With both lists set, a collection must be allowed and not blocked. |
 | `OSWIKI_API_KEY` | none | Your oswiki.xyz API key (Account, Developer) for your own rate limit. |
@@ -191,6 +202,8 @@ Every release is built and published by the [release workflow](.github/workflows
 | `OSWIKI_CONFIRM_MODE` | `human` | `human`: every `execute` must be approved by you in oswiki-sign's own confirmation dialog; clients without that dialog cannot execute. `ai`: the dialog is still used when the client has it; on clients without it, the AI's word counts as your confirmation. `off`: never a dialog, the AI may trade on its own within your limits (a manipulated text could trigger a trade within them; see [Confirmation dialog](#confirmation-dialog)). `ai` and `off` are announced loudly at startup, in previews and in `wallet_status`. |
 | `OSWIKI_DAILY_MAX_ETH` | 3x `OSWIKI_MAX_BUY_ETH` | Total ETH that buys plus new offers may use per UTC day on Ethereum. |
 | `OSWIKI_DAILY_MAX_APE` | 3x `OSWIKI_MAX_BUY_APE` | Same on ApeChain, in APE. |
+| `OSWIKI_DAILY_MAX_SEND_ETH` | `OSWIKI_DAILY_MAX_ETH` | Total ETH plus WETH that may be sent to other wallets per UTC day on Ethereum. Without it (and without a daily buy limit) sending funds on Ethereum is off; NFTs can still be sent. |
+| `OSWIKI_DAILY_MAX_SEND_APE` | `OSWIKI_DAILY_MAX_APE` | Same on ApeChain, APE plus WAPE. |
 | `OSWIKI_MAX_CANCELS_PER_DAY` | 200 | Cancelled orders per UTC day (each order counts). |
 | `OSWIKI_MAX_GWEI` | 200 | Highest max fee per gas on Ethereum; transactions are refused above it. |
 | `OSWIKI_MAX_GWEI_APECHAIN` | 1000 | Same on ApeChain. |
@@ -223,7 +236,8 @@ OSWIKI_ALLOWED_COLLECTIONS=0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258,0x790b2cf2
 - What oswiki-sign enforces in code, whatever the AI or the API say:
   - only Seaport 1.6 and the OpenSea conduit; fee exactly 1% to the known OSWiki fee recipient of the chain; royalty at most 25%, and at most 10% when it is unverified;
   - approvals only to the OpenSea conduit (your NFTs) and to Seaport for WETH/WAPE, for the exact amount, never unlimited;
-  - transactions only to Seaport, WETH/WAPE, or `setApprovalForAll` on the collection being traded;
+  - transactions only to Seaport, WETH/WAPE, or `setApprovalForAll` on the collection being traded; transfers and plain value sends only to the one recipient you approved in the dialog;
+  - every send to another wallet needs your approval in oswiki-sign's own dialog, in every confirmation mode;
   - the Seaport counter is always read from the chain (never assumed), purchases are re-encoded locally and must match the listing's own hash and exact price, and every transaction is simulated first;
   - prices are explicit numbers: no listing at 0, no guessed floor;
   - every `execute` needs your confirmation in oswiki-sign's own dialog (unless you chose `OSWIKI_CONFIRM_MODE=ai` on a client without the dialog, or `off`);
