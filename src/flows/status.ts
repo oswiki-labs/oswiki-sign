@@ -104,12 +104,16 @@ function settingsHelp(config: Config, fromChat: ReadonlySet<string>): string[] {
   ];
 }
 
-function confirmLine(mode: ConfirmMode, dialog: boolean | undefined): string {
-  if (mode === 'off') return 'OFF (OSWIKI_CONFIRM_MODE=off): no oswiki-sign dialog, execute runs on the AI\'s word within the limits above';
-  if (dialog === true) return 'the user approves every execute in the oswiki-sign dialog';
-  if (mode === 'ai') return 'WARNING - OSWIKI_CONFIRM_MODE=ai: without a dialog, execute runs on the word of the AI alone';
+export function confirmLine(mode: ConfirmMode, dialog: boolean | undefined): string {
+  if (mode === 'off') return 'autonomous (no dialog, OSWIKI_CONFIRM_MODE=off): the AI trades on its own within your limits; sends and limit changes still need the dialog';
+  if (mode === 'ai') {
+    if (dialog === true) return 'ai (OSWIKI_CONFIRM_MODE=ai): dialog when the client supports it (yours does, so you still approve every trade in the dialog), otherwise the AI\'s confirmation; to stop approving trades use confirmMode off';
+    if (dialog === false) return 'WARNING - OSWIKI_CONFIRM_MODE=ai: dialog when the client supports it (yours doesn\'t), otherwise the AI\'s confirmation, so execute runs on the AI\'s word alone';
+    return 'ai (OSWIKI_CONFIRM_MODE=ai): dialog when the client supports it, otherwise the AI\'s confirmation';
+  }
+  if (dialog === true) return 'human (OSWIKI_CONFIRM_MODE=human): you approve every trade in the dialog';
   if (dialog === false) return 'this MCP client cannot show the confirmation dialog, so execute is refused (OSWIKI_CONFIRM_MODE=human)';
-  return 'human (execute needs the confirmation dialog of the MCP client)';
+  return 'human (OSWIKI_CONFIRM_MODE=human): you approve every trade in the dialog of the MCP client';
 }
 
 function chainsFor(chainId: number | undefined): SupportedChainId[] {

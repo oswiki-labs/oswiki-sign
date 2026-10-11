@@ -298,7 +298,7 @@ describe('every safety warning still reaches the card', () => {
   it('confirmation off and AI mode put a notice on the card itself', async () => {
     const off = harness({ env: { OSWIKI_CONFIRM_MODE: 'off' } });
     setupBuy(off, { name: 'Otherdeed Expanded', verified: true, stats: { floorPrice: 0.5 } });
-    expect(flat(cardOf((await off.call('preview_buy', { chainId: 1, askIds: [askId] })).text))).toContain('⚠ Confirmation is off: this runs without a confirmation dialog');
+    expect(flat(cardOf((await off.call('preview_buy', { chainId: 1, askIds: [askId] })).text))).toContain('⚠ Autonomous (no dialog): the AI runs this on its own');
 
     const ai = harness({ env: { OSWIKI_CONFIRM_MODE: 'ai' } });
     ai.handler.confirmer = { available: () => false, ask: async () => 'declined' };

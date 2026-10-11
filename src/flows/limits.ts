@@ -79,9 +79,18 @@ export function nextOverrides(current: Overrides, config: Config, input: LimitsI
   return next;
 }
 
+export const MODE_LABEL: Record<ConfirmMode, string> = {
+  human: 'human (dialog for every trade)',
+  ai: 'ai (dialog if the client supports it, otherwise the AI\'s confirmation)',
+  off: 'off (autonomous, no dialog)',
+};
+
+export const AI_MODE_WITH_DIALOG = 'Note: your client supports the dialog, so `ai` still shows it for every trade; use confirmMode `off` (autonomous) to stop approving trades.';
+
 export function settingsDiff(before: Config, after: Config): string[] {
+  const label = (key: string, value: string | undefined) => (key === 'OSWIKI_CONFIRM_MODE' && value !== undefined ? MODE_LABEL[value as ConfirmMode] ?? value : value);
   const old = new Map(settingValues(before));
-  return settingValues(after).filter(([key, value]) => old.get(key) !== value).map(([key, value]) => `- ${key}: ${old.get(key)} -> ${value}`);
+  return settingValues(after).filter(([key, value]) => old.get(key) !== value).map(([key, value]) => `- ${key}: ${label(key, old.get(key))} -> ${label(key, value)}`);
 }
 
 async function collectionNames(ctx: Ctx, input: LimitsInput): Promise<string[]> {
@@ -95,7 +104,7 @@ async function collectionNames(ctx: Ctx, input: LimitsInput): Promise<string[]> 
 }
 
 /** Every change, tighter or looser, needs the user's approval in the dialog; without a dialog nothing changes. */
-export async function updateLimits(ctx: Ctx, settings: SettingsStore, approver: Approver, input: LimitsInput): Promise<{ text: string; modeChanged: boolean }> {
+export async function updateLimits(ctx: Ctx, settings: SettingsStore, approver: Approver, input: LimitsInput, notifiesToolList = false): Promise<{ text: string; modeChanged: boolean }> {
   const next = nextOverrides(settings.overrides, ctx.config, input);
   let after: Config;
   try {
@@ -103,8 +112,9 @@ export async function updateLimits(ctx: Ctx, settings: SettingsStore, approver: 
   } catch (err) {
     throw new GuardError(`${err instanceof Error ? err.message : 'Invalid value.'} Nothing was changed.`);
   }
+  const aiNote = input.confirmMode === 'ai' && approver.available() ? AI_MODE_WITH_DIALOG : '';
   const diff = settingsDiff(ctx.config, after);
-  if (diff.length === 0) return { text: 'Nothing to change: these values are already in force.', modeChanged: false };
+  if (diff.length === 0) return { text: ['Nothing to change: these values are already in force.', aiNote].filter(Boolean).join('\n'), modeChanged: false };
   if (!approver.available()) throw new ConfirmError(NO_DIALOG_SETTINGS);
 
   const names = await collectionNames(ctx, input);
@@ -131,7 +141,8 @@ export async function updateLimits(ctx: Ctx, settings: SettingsStore, approver: 
     text: [
       'Settings updated (approved by the user in the oswiki-sign dialog), in effect now without a restart:',
       ...diff,
-      modeChanged ? 'The confirmation mode applies to the next execute. The tool descriptions refresh when the client reloads the tool list; the server instructions on the next restart.' : '',
+      modeChanged ? `Confirmation mode is now ${MODE_LABEL[ctx.config.confirmMode]}, in effect immediately for the next execute.${notifiesToolList ? ' The client was told to refresh the tool descriptions (tools/list_changed);' : ' The tool descriptions refresh when the client reloads the tool list;'} the server instructions update after a client restart.` : '',
+      aiNote,
     ].filter(Boolean).join('\n'),
     modeChanged,
   };

@@ -80,4 +80,4 @@ export const CONFIRM_OFF_RULE = 'Confirmation is off: you may execute when the u
 
 export const CONFIRM_OFF_FOOTER = (confirmId: string) => `${CONFIRM_OFF_RULE} To run it, call execute with confirmId ${confirmId}.`;
 
-export const CONFIRM_OFF_WARNING = 'Confirmation: OFF - trades run on the AI\'s word; a manipulated text could trigger a trade within your limits';
+export const CONFIRM_OFF_WARNING = 'Confirmation: OFF (autonomous, no dialog) - trades run on the AI\'s word; a manipulated text could trigger a trade within your limits';

@@ -4,10 +4,10 @@ import { join } from 'node:path';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { ElicitRequestSchema, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { custom, encodeFunctionData, type Hex } from 'viem';
 import { mainnet } from 'viem/chains';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { NFT_ABI, WRAPPED_NATIVE_ABI } from '../src/abi.js';
 import { assertAllowedTx, assertNoPendingTx, createChains, gasLimitCap, networkFee, PendingTxError, sendGuardedTx, TxRefusedError, type PendingTracker } from '../src/chain.js';
@@ -16,7 +16,9 @@ import { OPENSEA_CONDUIT_ADDRESS, SEAPORT_ADDRESS, WRAPPED_NATIVE } from '../src
 import { hashOrderComponents } from '../src/seaport/sign.js';
 import { buildListingOrder, serializeOrderComponents } from '../src/seaport/order.js';
 import { loadWallet } from '../src/secret.js';
-import { chargeOf, createSignServer, createToolHandler, elicitationConfirmer, NO_HUMAN_CONFIRMER, type HumanConfirmer } from '../src/server.js';
+import { CARD_TRAILER, chargeOf, CONFIRM_MODE_HELP, createSignServer, createToolHandler, elicitationConfirmer, NO_HUMAN_CONFIRMER, serverInstructions, toolDefinitions, type HumanConfirmer } from '../src/server.js';
+import { AI_MODE_WITH_DIALOG } from '../src/flows/limits.js';
+import { confirmLine } from '../src/flows/status.js';
 import { SettingsStore } from '../src/settings.js';
 import { VERSION } from '../src/version.js';
 import { LOCK_STALE_MS, StateLockError, TradeState, type PendingTx } from '../src/state.js';
@@ -98,7 +100,7 @@ describe('human confirmation (H2)', () => {
     expect(text).toContain('Confirmation is off: you may execute when the user asked for this trade or gave a standing instruction that covers it; stay within the limits; report every executed trade to the user.');
     expect(text).not.toMatch(/ask the user|ask them to confirm/i);
     const status = (await h.call('wallet_status')).text;
-    expect(status).toContain('Confirmation: OFF - trades run on the AI\'s word; a manipulated text could trigger a trade within your limits');
+    expect(status).toContain('Confirmation: OFF (autonomous, no dialog) - trades run on the AI\'s word; a manipulated text could trigger a trade within your limits');
     expect(status).toContain('OSWIKI_CONFIRM_MODE=off');
     const result = await h.call('execute', { confirmId: confirmIdOf(text) });
     expect(result.isError).toBe(false);
@@ -343,6 +345,101 @@ describe('update_limits', () => {
     await h.call('update_limits', { maxBuyEth: '3' });
     expect(otherWallet.load().maxBuyWei[1]).toBeNull();
     expect(otherWallet.warning).toMatch(/integrity check/);
+  });
+});
+
+describe('confirmation modes are unambiguous (0.2.2)', () => {
+  const trailerOf = (text: string) => text.slice(text.indexOf(CARD_TRAILER));
+
+  it('describes off as the way to stop approving trades and ai as dialog-less clients only', () => {
+    const tool = toolDefinitions('human').find(entry => entry.name === 'update_limits')!;
+    const description = ((tool.inputSchema.properties as Record<string, { description?: string }>).confirmMode)!.description!;
+    expect(description).toBe(CONFIRM_MODE_HELP);
+    expect(description).toMatch(/^off = autonomous: the AI trades on its own within the limits, no dialog; use this when the user wants to stop approving trades\./);
+    expect(description).toMatch(/human = the user approves every trade .*\(default\)/);
+    expect(description).toMatch(/ai = only for clients WITHOUT dialog support/);
+    expect(tool.description).toContain('set confirmMode "off" (autonomous, no dialog), not "ai"');
+    for (const mode of ['human', 'ai', 'off'] as const) expect(serverInstructions(mode)).toContain(CONFIRM_MODE_HELP);
+  });
+
+  it('setting ai on a client with the dialog says the dialog stays and points to off', async () => {
+    const h = harness();
+    const approve = recorder();
+    h.handler.confirmer = approve;
+    const result = await h.call('update_limits', { confirmMode: 'ai' });
+    expect(result.isError).toBe(false);
+    expect(approve.asked[0]).toContain('- OSWIKI_CONFIRM_MODE: human (dialog for every trade) -> ai (dialog if the client supports it, otherwise the AI\'s confirmation)');
+    expect(result.text).toContain(AI_MODE_WITH_DIALOG);
+    expect((await h.call('update_limits', { confirmMode: 'ai' })).text).toContain(AI_MODE_WITH_DIALOG);
+    const off = await h.call('update_limits', { confirmMode: 'off' });
+    expect(off.text).toContain('Confirmation mode is now off (autonomous, no dialog), in effect immediately');
+    expect(off.text).not.toContain(AI_MODE_WITH_DIALOG);
+  });
+
+  it('wallet_status reflects the effective mode, also after a chat change', async () => {
+    const h = harness();
+    expect((await h.call('wallet_status')).text).toContain('- confirmation: human (OSWIKI_CONFIRM_MODE=human): you approve every trade in the dialog');
+    await h.call('update_limits', { confirmMode: 'ai' });
+    const ai = (await h.call('wallet_status')).text;
+    expect(ai).toContain('dialog when the client supports it (yours does');
+    expect(ai).not.toMatch(/approves every execute/);
+    h.handler.confirmer = NO_HUMAN_CONFIRMER;
+    expect((await h.call('wallet_status')).text).toContain('dialog when the client supports it (yours doesn\'t), otherwise the AI\'s confirmation');
+    h.handler.confirmer = recorder();
+    await h.call('update_limits', { confirmMode: 'off' });
+    expect((await h.call('wallet_status')).text).toContain('- confirmation: autonomous (no dialog, OSWIKI_CONFIRM_MODE=off): the AI trades on its own within your limits; sends and limit changes still need the dialog');
+    expect(confirmLine('off', true)).toBe(confirmLine('off', false));
+  });
+
+  it('preview trailers match what execute does in every mode', async () => {
+    const cases = [
+      { mode: 'human', dialog: true, has: /asks the user to approve this exact trade in its own confirmation dialog/ },
+      { mode: 'human', dialog: false, has: /cannot show the confirmation dialog, so execute will be refused/ },
+      { mode: 'ai', dialog: true, has: /asks the user to approve this exact trade in its own confirmation dialog/ },
+      { mode: 'ai', dialog: false, has: /WARNING - CONFIRM MODE AI.*no confirmation dialog/ },
+      { mode: 'off', dialog: true, has: /AUTONOMOUS - CONFIRMATION OFF.*shows no dialog for this trade/ },
+      { mode: 'off', dialog: false, has: /AUTONOMOUS - CONFIRMATION OFF.*shows no dialog for this trade/ },
+    ] as const;
+    for (const { mode, dialog, has } of cases) {
+      const h = harness({ env: { OSWIKI_CONFIRM_MODE: mode }, logsFor: () => [fulfilledLog(vectorHash, OTHER_SELLER)] });
+      const approve = recorder();
+      h.handler.confirmer = dialog ? approve : NO_HUMAN_CONFIRMER;
+      setupBuy(h);
+      const text = await previewBuy(h);
+      const trailer = trailerOf(text);
+      expect(trailer, `${mode}/${dialog}`).toMatch(has);
+      if (mode === 'off') expect(trailer).not.toMatch(/asks the user to approve|approval dialog|Ask the user to confirm|will open/i);
+      const result = await h.call('execute', { confirmId: confirmIdOf(text) });
+      const opened = approve.asked.length === 1;
+      expect(opened, `${mode}/${dialog} dialog`).toBe(/asks the user to approve/.test(trailer));
+      expect(result.isError, `${mode}/${dialog} refused`).toBe(/will be refused/.test(trailer));
+    }
+  });
+
+  it('changing the mode sends tools/list_changed and says what applies when', async () => {
+    const h = harness();
+    const server = createSignServer(h.handler);
+    const client = new Client({ name: 'test', version: '1.0.0' }, { capabilities: { elicitation: { form: {} } } });
+    client.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: { confirm: true } }));
+    let changed = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      changed++;
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    const result = await client.callTool({ name: 'update_limits', arguments: { confirmMode: 'off' } }) as { content: Array<{ text: string }> };
+    const text = result.content[0]!.text;
+    expect(text).toContain('in effect immediately for the next execute');
+    expect(text).toContain('The client was told to refresh the tool descriptions (tools/list_changed)');
+    expect(text).toContain('the server instructions update after a client restart');
+    await vi.waitFor(() => expect(changed).toBe(1));
+    const { tools } = await client.listTools();
+    expect(tools.find(tool => tool.name === 'execute')).not.toHaveProperty('_meta');
+    expect(tools.find(tool => tool.name === 'execute')!.description).toContain('Autonomous: no confirmation dialog');
+    await client.callTool({ name: 'update_limits', arguments: { maxTradesPerDay: 10 } });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(changed).toBe(1);
+    await client.close();
   });
 });
 

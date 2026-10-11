@@ -7,7 +7,7 @@ The private key stays on your machine. The AI never sees it, the hosted OSWiki M
 ## Quick setup
 
 ```sh
-npx -y @oswikixyz/sign@0.2.1 setup
+npx -y @oswikixyz/sign@0.2.2 setup
 ```
 
 Run it in a terminal (Node.js 20 or newer). Five short steps:
@@ -18,7 +18,7 @@ Run it in a terminal (Node.js 20 or newer). Five short steps:
 4. **Confirmation**: every trade waits for your OK in oswiki-sign's own dialog (recommended), or the AI may trade on its own within your limits (`OSWIKI_CONFIRM_MODE=off`, see [Confirmation dialog](#confirmation-dialog)).
 5. **Client**: adds oswiki-sign to Claude Code (`claude mcp add --scope user`), Cursor (`~/.cursor/mcp.json`) or Claude Desktop (`claude_desktop_config.json`), or prints the config. The config holds only the path of the key file and the exact version. For Claude Code it also offers the [hardening](#claude-code-hardening) deny rules.
 
-Every file it changes is backed up first (`<file>.bak-<time>`), other MCP servers and settings are kept, and an existing key file is only replaced if you confirm it (it is then moved to `key.bak-<time>`). Run setup again to change anything; it keeps your wallet. Colors are off with `NO_COLOR` or when the output is not a terminal. `npx -y @oswikixyz/sign@0.2.1 setup --help` shows the steps. To do everything by hand instead, see [Manual setup](#manual-setup).
+Every file it changes is backed up first (`<file>.bak-<time>`), other MCP servers and settings are kept, and an existing key file is only replaced if you confirm it (it is then moved to `key.bak-<time>`). Run setup again to change anything; it keeps your wallet. Colors are off with `NO_COLOR` or when the output is not a terminal. `npx -y @oswikixyz/sign@0.2.2 setup --help` shows the steps. To do everything by hand instead, see [Manual setup](#manual-setup).
 
 ## How it works
 
@@ -70,7 +70,7 @@ When the collection has on-chain ERC-2981 royalty info, the royalty in a preview
 
 ## Manual setup
 
-[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.2.1`), never `latest` or a range, and update only on purpose.
+[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.2.2`), never `latest` or a range, and update only on purpose.
 
 ### 1. Store the key in a file
 
@@ -105,7 +105,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
   "mcpServers": {
     "oswiki-sign": {
       "command": "npx",
-      "args": ["-y", "@oswikixyz/sign@0.2.1"],
+      "args": ["-y", "@oswikixyz/sign@0.2.2"],
       "env": {
         "OSWIKI_WALLET_KEY_FILE": "/Users/you/.oswiki-sign/key",
         "OSWIKI_DRY_RUN": "1",
@@ -117,7 +117,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
 }
 ```
 
-If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.2.1"]`.
+If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.2.2"]`.
 
 Claude Code (user scope, so it is stored in `~/.claude.json` and not in a project):
 
@@ -127,15 +127,15 @@ claude mcp add --scope user oswiki-sign \
   -e OSWIKI_DRY_RUN=1 \
   -e OSWIKI_MAX_BUY_ETH=0.5 \
   -e OSWIKI_MAX_BUY_APE=500 \
-  -- npx -y @oswikixyz/sign@0.2.1
+  -- npx -y @oswikixyz/sign@0.2.2
 ```
 
-On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.2.1`.
+On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.2.2`.
 
 Check the setup from a terminal with the same environment variables set:
 
 ```sh
-npx -y @oswikixyz/sign@0.2.1 status
+npx -y @oswikixyz/sign@0.2.2 status
 ```
 
 When the dry-run previews look right, remove `OSWIKI_DRY_RUN` (or set it to `0`) and restart the client.
@@ -201,7 +201,7 @@ Every release is built and published by the [release workflow](.github/workflows
 | `OSWIKI_API_KEY` | none | Your oswiki.xyz API key (Account, Developer) for your own rate limit. |
 | `OSWIKI_RPC_URL_MAINNET` | `https://ethereum-rpc.publicnode.com` | Ethereum RPC (https). |
 | `OSWIKI_RPC_URL_APECHAIN` | `https://rpc.apechain.com/http` | ApeChain RPC (https). |
-| `OSWIKI_CONFIRM_MODE` | `human` | `human`: every `execute` must be approved by you in oswiki-sign's own confirmation dialog; clients without that dialog cannot execute. `ai`: the dialog is still used when the client has it; on clients without it, the AI's word counts as your confirmation. `off`: never a dialog, the AI may trade on its own within your limits (a manipulated text could trigger a trade within them; see [Confirmation dialog](#confirmation-dialog)). `ai` and `off` are announced loudly at startup, in previews and in `wallet_status`. |
+| `OSWIKI_CONFIRM_MODE` | `human` | `human`: every `execute` must be approved by you in oswiki-sign's own confirmation dialog; clients without that dialog cannot execute. `ai`: only for clients without the dialog, where the AI's word counts as your confirmation; clients that have the dialog still show it in `ai` mode, so it does not stop approvals. `off` (autonomous): never a dialog, the AI may trade on its own within your limits; this is the mode for "I do not want to approve every trade" (a manipulated text could trigger a trade within your limits; see [Confirmation dialog](#confirmation-dialog)). `ai` and `off` are announced loudly at startup, in previews and in `wallet_status`. |
 | `OSWIKI_DAILY_MAX_ETH` | 3x `OSWIKI_MAX_BUY_ETH` | Total ETH that buys plus new offers may use per UTC day on Ethereum. |
 | `OSWIKI_DAILY_MAX_APE` | 3x `OSWIKI_MAX_BUY_APE` | Same on ApeChain, in APE. |
 | `OSWIKI_DAILY_MAX_SEND_ETH` | off | Total ETH plus WETH that may be sent to other wallets per UTC day on Ethereum. Without it sending funds on Ethereum is off (it does not follow the buy limits); NFTs can still be sent. |
