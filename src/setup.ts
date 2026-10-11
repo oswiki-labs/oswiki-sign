@@ -525,8 +525,9 @@ async function confirmationStep(deps: SetupDeps): Promise<boolean> {
   const { io } = deps;
   io.print('');
   io.print(paint(deps.color).bold('4/5 Confirmation'));
+  io.print('Let the AI trade without asking you?');
   io.print('  No = you approve each trade in a dialog (recommended)');
-  return askYesNo(io, 'Let the AI trade without asking you?', false);
+  return askYesNo(io, 'Your choice', false);
 }
 
 function printConfig(io: Prompter, deps: SetupDeps, entry: ServerEntry): void {

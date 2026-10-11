@@ -140,7 +140,7 @@ describe('setup: create wallet', () => {
     expect(h.questions).toContain('Back up the private key now? (y/N) - if you lose the key file, the wallet is gone ');
     expect(h.questions).toContain('Dry run (nothing is sent)? (y/N) ');
     expect(h.questions).toContain('1) Any  2) Only these  3) Any except these [1]: ');
-    expect(h.questions).toContain('Let the AI trade without asking you? (y/N) ');
+    expect(h.questions).toContain('Your choice (y/N) ');
     expect(h.questions).toContain('1) Claude Code  2) Cursor  3) Claude Desktop  4) Print config [1]: ');
     for (const question of h.questions) expect(question.length, question).toBeLessThanOrEqual(90);
     expect(out).toContain('No = you approve each trade in a dialog (recommended)');
