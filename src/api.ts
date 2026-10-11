@@ -134,6 +134,8 @@ export interface VerifiedCollection {
   name: string;
 }
 
+const ENS_UNRESOLVED_CODES = new Set(['not_found', 'unsupported_name', 'offchain_resolver']);
+
 const VERIFIED_CACHE_MS = 30 * 60_000;
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -322,7 +324,14 @@ export class ApiClient {
   }
 
   async ensResolve(name: string, chainId: number): Promise<EnsLookup> {
-    const data = asRecord(await this.request('GET', '/v1/ens/resolve', { name, chainId }));
+    let raw: unknown;
+    try {
+      raw = await this.request('GET', '/v1/ens/resolve', { name, chainId });
+    } catch (err) {
+      if (err instanceof ApiError && err.code !== null && ENS_UNRESOLVED_CODES.has(err.code)) return { address: null, apechainAddress: null, reverseName: null };
+      throw err;
+    }
+    const data = asRecord(raw);
     const address = cleanAddress(data?.address);
     const apechainAddress = cleanAddress(data?.apechainAddress);
     if (!data || (data.address !== null && address === null) || (data.apechainAddress != null && apechainAddress === null)) {

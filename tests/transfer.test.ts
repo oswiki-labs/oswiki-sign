@@ -419,7 +419,7 @@ describe('recipient safety', () => {
     const h = setup();
     const text = await previewOk(h, { chainId: 33139, to: 'Friend.eth', items: [{ contract: NFT721, tokenId: '1' }] });
     expect(text).toContain(`     ${FRIEND}`);
-    expect(text).toContain('friend.eth - resolved via 2 independent sources: your Ethereum RPC and the OSWiki API; its ApeChain address (ENSIP-11) is the same');
+    expect(text).toContain('friend.eth - resolved via 2 independent sources: your Ethereum RPC and the OSWiki API; ApeChain address from the name\'s own ApeChain (ENSIP-11) record');
     expect(text).toMatch(/^APPROVE SEND · ApeChain/);
     expect(h.api.requests.find(request => request.path === '/v1/ens/resolve')?.query).toEqual({ name: 'friend.eth', chainId: '33139' });
     const result = await h.call('execute', { confirmId: confirmIdOf(text) });
@@ -594,21 +594,64 @@ describe('ENS needs two independent sources', () => {
 });
 
 describe('ApeChain recipients', () => {
-  it('refuses an ENS name without an ApeChain (ENSIP-11) address', async () => {
+  it('falls back to the Ethereum address of a name without an ApeChain record when it is a plain wallet', async () => {
     const h = setup();
     h.world.coin.delete('friend.eth');
-    const result = await h.call('preview_transfer', { chainId: 33139, to: 'friend.eth', items: [{ contract: NFT721, tokenId: '1' }] });
-    expect(result.isError).toBe(true);
-    expect(result.text).toMatch(/friend\.eth has no ApeChain address set/);
-    expect((await h.call('preview_transfer', { chainId: 1, to: 'friend.eth', items: [{ contract: NFT721, tokenId: '1' }] })).isError).toBe(false);
+    const text = await previewOk(h, { chainId: 33139, to: 'friend.eth', items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(text).toContain('no ApeChain address set for this name; using its Ethereum address (a normal wallet, same owner on every chain)');
+    expect(text).toContain(`     ${FRIEND}`);
+    expect((await h.call('execute', { confirmId: confirmIdOf(text) })).isError).toBe(false);
+    expect(decodeFunctionData({ abi: ERC721_SAFE_TRANSFER_ABI, data: h.world.sent[0]!.data }).args[1].toLowerCase()).toBe(FRIEND);
   });
 
-  it('refuses an ENS name whose ApeChain address differs from its Ethereum address', async () => {
+  it('refuses a name without an ApeChain record that points to a contract on Ethereum or on ApeChain', async () => {
     const h = setup();
-    h.world.coin.set('friend.eth', SAFE as Hex);
+    h.world.forward.set('safe.eth', SAFE);
+    const onEthereum = await h.call('preview_transfer', { chainId: 33139, to: 'safe.eth', items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(onEthereum.isError).toBe(true);
+    expect(onEthereum.text).toContain('this name points to a smart wallet that may not exist on ApeChain - ask the recipient for their ApeChain address');
+    expect((await h.call('preview_transfer', { chainId: 1, to: 'safe.eth', items: [{ contract: NFT721, tokenId: '1' }] })).isError).toBe(false);
+
+    const onApe = '0x8888888888888888888888888888888888888888' as Address;
+    h.world.forward.set('ape.eth', onApe);
+    h.world.apeCode = new Map([...h.world.code, [onApe, '0x6080' as Hex]]);
+    const result = await h.call('preview_transfer', { chainId: 33139, to: 'ape.eth', items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/smart wallet that may not exist on ApeChain/);
+    expect(h.world.sent).toHaveLength(0);
+  });
+
+  it('uses the ApeChain (ENSIP-11) record even when it differs from the Ethereum address', async () => {
+    const h = setup();
+    const apeWallet = '0x7777777777777777777777777777777777777777' as Address;
+    h.world.coin.set('friend.eth', apeWallet as Hex);
+    const text = await previewOk(h, { chainId: 33139, to: 'friend.eth', items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(text).toContain(`     ${apeWallet}`);
+    expect(text).toMatch(/ApeChain address from the name's own ApeChain \(ENSIP-11\) record/);
+    expect((await h.call('execute', { confirmId: confirmIdOf(text) })).isError).toBe(false);
+    expect(decodeFunctionData({ abi: ERC721_SAFE_TRANSFER_ABI, data: h.world.sent[0]!.data }).args[1].toLowerCase()).toBe(apeWallet);
+  });
+
+  it('refuses when the RPC and the OSWiki API disagree about the ApeChain record', async () => {
+    const other = newWorld();
+    other.coin.set('friend.eth', SAFE as Hex);
+    const h = setup({ ensApi: other });
     const result = await h.call('preview_transfer', { chainId: 33139, to: 'friend.eth', nativeAmount: '1' });
     expect(result.isError).toBe(true);
-    expect(result.text).toMatch(/ApeChain address set for friend\.eth \(0x4444.*\) differs from its Ethereum address/);
+    expect(result.text).toMatch(/disagree about the ApeChain address of friend\.eth/);
+    expect((await h.call('preview_transfer', { chainId: 1, to: 'friend.eth', nativeAmount: '1' })).isError).toBe(false);
+  });
+
+  it('reads the OSWiki API not_found and off-chain answers as no address, rpc_unavailable as unavailable', async () => {
+    const h = setup();
+    const answer = { status: 404, code: 'not_found' };
+    h.api.routes.set('GET /v1/ens/resolve', () => new Response(JSON.stringify({ success: false, code: answer.code, message: 'x' }), { status: answer.status }));
+    expect((await h.call('preview_transfer', { chainId: 1, to: 'nobody.eth', nativeAmount: '0.1' })).text).toMatch(/does not resolve to an address/);
+    expect((await h.call('preview_transfer', { chainId: 1, to: 'friend.eth', nativeAmount: '0.1' })).text).toMatch(/disagree about friend\.eth/);
+    Object.assign(answer, { status: 422, code: 'offchain_resolver' });
+    expect((await h.call('preview_transfer', { chainId: 1, to: 'nobody.eth', nativeAmount: '0.1' })).text).toMatch(/does not resolve to an address/);
+    Object.assign(answer, { status: 503, code: 'rpc_unavailable' });
+    expect((await h.call('preview_transfer', { chainId: 1, to: 'nobody.eth', nativeAmount: '0.1' })).text).toMatch(/unavailable right now/);
   });
 
   it('refuses an Ethereum smart wallet that has no code on ApeChain, at preview and at execute', async () => {

@@ -62,13 +62,14 @@ async function resolveCoinAddress(client: PublicClient, name: string, coinType: 
 export interface VerifiedEns {
   name: string;
   address: Address;
+  apechain: 'record' | 'ethereum-fallback' | null;
 }
 
 const ASK_ADDRESS = 'Ask the user for the full 0x address. Nothing was sent.';
 
 /**
  * Forward-resolves through the user's Ethereum RPC and the OSWiki API independently and refuses unless both agree;
- * on ApeChain the name must also carry an ENSIP-11 ApeChain address equal to its Ethereum address.
+ * on ApeChain an ENSIP-11 ApeChain record wins, else the caller must check the Ethereum address is a plain wallet.
  */
 export async function resolveEnsVerified(client: PublicClient, api: ApiClient, input: string, chainId: SupportedChainId): Promise<VerifiedEns> {
   const name = normalizeEnsName(input);
@@ -84,15 +85,12 @@ export async function resolveEnsVerified(client: PublicClient, api: ApiClient, i
   if ((address ?? null) !== other.address) {
     throw new GuardError(`Refused: the Ethereum RPC and the OSWiki API disagree about ${name} (${address ?? 'no address'} vs ${other.address ?? 'no address'}). Do not send to this name. ${ASK_ADDRESS}`);
   }
-  if (!address) throw new GuardError(`The ENS name ${name} does not resolve to an address (or uses an off-chain resolver this signer does not follow). ${ASK_ADDRESS}`);
-  if (ape) {
-    if (apeAddress !== other.apechainAddress) {
-      throw new GuardError(`Refused: the Ethereum RPC and the OSWiki API disagree about the ApeChain address of ${name} (${apeAddress ?? 'none'} vs ${other.apechainAddress ?? 'none'}). ${ASK_ADDRESS}`);
-    }
-    if (!apeAddress) throw new GuardError(`Refused: ${name} has no ApeChain address set (ENSIP-11 coin type ${APECHAIN_COIN_TYPE}); its Ethereum address may not belong to the same owner on ApeChain. ${ASK_ADDRESS}`);
-    if (apeAddress !== address) throw new GuardError(`Refused: the ApeChain address set for ${name} (${apeAddress}) differs from its Ethereum address (${address}). ${ASK_ADDRESS}`);
+  if (ape && apeAddress !== other.apechainAddress) {
+    throw new GuardError(`Refused: the Ethereum RPC and the OSWiki API disagree about the ApeChain address of ${name} (${apeAddress ?? 'none'} vs ${other.apechainAddress ?? 'none'}). ${ASK_ADDRESS}`);
   }
-  return { name, address };
+  if (ape && apeAddress) return { name, address: apeAddress as Address, apechain: 'record' };
+  if (!address) throw new GuardError(`The ENS name ${name} does not resolve to an address (or uses an off-chain resolver this signer does not follow). ${ASK_ADDRESS}`);
+  return { name, address, apechain: ape ? 'ethereum-fallback' : null };
 }
 
 /** Primary ENS name of an address, only when it resolves forward to the same address; null on any failure. */
