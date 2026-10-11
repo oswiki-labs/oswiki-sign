@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { custom, decodeFunctionData, encodeFunctionData, encodeFunctionResult, keccak256, parseTransaction, toFunctionSelector, type Address, type Hex } from 'viem';
+import { custom, decodeFunctionData, TimeoutError, encodeFunctionData, encodeFunctionResult, keccak256, parseTransaction, toFunctionSelector, type Address, type Hex } from 'viem';
 import { namehash } from 'viem/ens';
 import { describe, expect, it } from 'vitest';
 
@@ -13,10 +13,11 @@ import { loadConfig, type ConfirmMode } from '../src/config.js';
 import { WRAPPED_NATIVE, type SupportedChainId } from '../src/constants.js';
 import type { Ctx } from '../src/flows/common.js';
 import { loadWallet } from '../src/secret.js';
+import type { PendingTracker } from '../src/chain.js';
 import { createToolHandler, NO_HUMAN_CONFIRMER, serverInstructions, toolDefinitions, type HumanConfirmer } from '../src/server.js';
 import { SettingsStore } from '../src/settings.js';
 import { TradeState } from '../src/state.js';
-import { ENS_REGISTRY_ABI, ENS_REGISTRY_ADDRESS, ENS_RESOLVER_ABI, ERC1155_TRANSFER_ABI, ERC721_SAFE_TRANSFER_ABI, NFT_TRANSFER_ABI, WRAPPED_TRANSFER_ABI } from '../src/transfer-abi.js';
+import { ENS_ADDR_COIN_ABI, ENS_REGISTRY_ABI, ENS_REGISTRY_ADDRESS, ENS_RESOLVER_ABI, ERC1155_TRANSFER_ABI, ERC721_SAFE_TRANSFER_ABI, NFT_TRANSFER_ABI, WRAPPED_TRANSFER_ABI } from '../src/transfer-abi.js';
 import { confirmIdOf, ETH, mockApi, RevertError, TEST_ADDRESS, TEST_KEY } from './helpers.js';
 
 const NFT721 = '0x790b2cf29ed4f310bf7641f013c65d4560d28371' as Address;
@@ -38,11 +39,15 @@ interface World {
   nativeBalance: bigint;
   wrappedBalance: bigint;
   code: Map<string, Hex>;
+  apeCode: Map<string, Hex> | null;
   nonces: Map<string, number>;
   balances: Map<string, bigint>;
   forward: Map<string, Address>;
+  coin: Map<string, Hex>;
   reverse: Map<string, string>;
   revert: (call: Call, world: World) => Hex | null;
+  mine: boolean;
+  broadcastFails: boolean;
   sent: Array<{ chainId: number; to: Address; data: Hex; value: bigint }>;
   receipts: Map<string, unknown>;
 }
@@ -55,11 +60,15 @@ function newWorld(): World {
     nativeBalance: 10n * ETH,
     wrappedBalance: 5n * ETH,
     code: new Map([[SAFE, '0x6080604052' as Hex], [NFT721, '0x60' as Hex], [NFT1155, '0x60' as Hex], [OTHER1155, '0x60' as Hex]]),
+    apeCode: null,
     nonces: new Map([[FRESH, 0]]),
     balances: new Map([[FRESH, 0n]]),
     forward: new Map([['friend.eth', FRIEND]]),
+    coin: new Map([['friend.eth', FRIEND as Hex]]),
     reverse: new Map([[FRIEND, 'friend.eth']]),
     revert: () => null,
+    mine: true,
+    broadcastFails: false,
     sent: [],
     receipts: new Map(),
   };
@@ -68,9 +77,11 @@ function newWorld(): World {
 const NFT_CALLS = [...NFT_ABI, ...NFT_TRANSFER_ABI];
 const WRAPPED_CALLS = [...WRAPPED_NATIVE_ABI, ...WRAPPED_TRANSFER_ABI];
 
-function ensNodes(world: World): Map<string, { addr?: Address; name?: string }> {
-  const nodes = new Map<string, { addr?: Address; name?: string }>();
-  for (const [name, addr] of world.forward) nodes.set(namehash(name), { addr });
+const RESOLVER_CALLS = [...ENS_RESOLVER_ABI, ...ENS_ADDR_COIN_ABI];
+
+function ensNodes(world: World): Map<string, { addr?: Address; coin?: Hex; name?: string }> {
+  const nodes = new Map<string, { addr?: Address; coin?: Hex; name?: string }>();
+  for (const [name, addr] of world.forward) nodes.set(namehash(name), { addr, coin: world.coin.get(name) });
   for (const [addr, name] of world.reverse) nodes.set(namehash(`${addr.slice(2)}.addr.reverse`), { name });
   return nodes;
 }
@@ -84,8 +95,12 @@ function ethCall(world: World, call: { to?: string; data?: Hex; value?: string }
     return encodeFunctionResult({ abi: ENS_REGISTRY_ABI, functionName: 'resolver', result: ensNodes(world).has(node) ? RESOLVER : '0x0000000000000000000000000000000000000000' });
   }
   if (to === RESOLVER) {
-    const decoded = decodeFunctionData({ abi: ENS_RESOLVER_ABI, data });
+    const decoded = decodeFunctionData({ abi: RESOLVER_CALLS, data });
     const entry = ensNodes(world).get(decoded.args[0]);
+    if (decoded.functionName === 'addr' && decoded.args.length === 2) {
+      if (decoded.args[1] !== 2147516787n) throw new RevertError('0x');
+      return encodeFunctionResult({ abi: ENS_ADDR_COIN_ABI, functionName: 'addr', result: entry?.coin ?? '0x' });
+    }
     if (decoded.functionName === 'addr') return encodeFunctionResult({ abi: ENS_RESOLVER_ABI, functionName: 'addr', result: entry?.addr ?? '0x0000000000000000000000000000000000000000' });
     return encodeFunctionResult({ abi: ENS_RESOLVER_ABI, functionName: 'name', result: entry?.name ?? '' });
   }
@@ -124,7 +139,7 @@ function transport(chainId: SupportedChainId, world: World) {
         case 'eth_chainId': return `0x${chainId.toString(16)}`;
         case 'eth_blockNumber': return '0x10';
         case 'eth_getBalance': return `0x${(who === TEST_ADDRESS ? world.nativeBalance : world.balances.get(who) ?? ETH).toString(16)}`;
-        case 'eth_getCode': return world.code.get(who) ?? '0x';
+        case 'eth_getCode': return (chainId === 33139 && world.apeCode ? world.apeCode : world.code).get(who) ?? '0x';
         case 'eth_gasPrice': return '0x3b9aca00';
         case 'eth_maxPriorityFeePerGas': return '0x1';
         case 'eth_estimateGas': {
@@ -134,10 +149,12 @@ function transport(chainId: SupportedChainId, world: World) {
         case 'eth_getTransactionCount': return `0x${(who === TEST_ADDRESS ? world.sent.length : world.nonces.get(who) ?? 3).toString(16)}`;
         case 'eth_getBlockByNumber': return { number: '0x10', hash: `0x${'33'.repeat(32)}`, baseFeePerGas: '0x3b9aca00', timestamp: '0x0', transactions: [], gasLimit: '0x1c9c380', gasUsed: '0x0', parentHash: `0x${'44'.repeat(32)}` };
         case 'eth_sendRawTransaction': {
+          if (world.broadcastFails) throw new TimeoutError({ body: {}, url: 'https://rpc.test' });
           const tx = parseTransaction(p[0] as Hex);
           const record = { chainId, to: tx.to!.toLowerCase() as Address, data: tx.data ?? '0x', value: tx.value ?? 0n };
           world.sent.push(record);
           const hash = keccak256(p[0] as Hex);
+          if (!world.mine) return hash;
           world.receipts.set(hash, {
             status: '0x1', transactionHash: hash, blockNumber: '0x10', blockHash: `0x${'55'.repeat(32)}`, transactionIndex: '0x0', from: TEST_ADDRESS, to: record.to,
             cumulativeGasUsed: '0x5208', gasUsed: '0x5208', effectiveGasPrice: '0x1', contractAddress: null, logsBloom: `0x${'00'.repeat(256)}`, type: '0x2', logs: [],
@@ -158,12 +175,22 @@ function recorder(decision: 'confirmed' | 'declined' = 'confirmed'): HumanConfir
   return { asked, available: () => true, ask: async (message, title) => { asked.push({ message, title }); return decision; } };
 }
 
-function setup(options: { env?: Record<string, string>; confirmer?: HumanConfirmer } = {}) {
+function ensApi(world: World | 'down') {
+  return (_body: unknown, url: URL) => {
+    if (world === 'down') return new Response('{}', { status: 503 });
+    const name = url.searchParams.get('name') ?? '';
+    return { name, address: world.forward.get(name) ?? null, apechainAddress: world.coin.get(name) ?? null, reverseName: null };
+  };
+}
+
+function setup(options: { env?: Record<string, string>; confirmer?: HumanConfirmer; ensApi?: World | 'down'; receiptTimeoutMs?: number } = {}) {
   const env: NodeJS.ProcessEnv = {
     OSWIKI_WALLET_KEY: TEST_KEY,
     OSWIKI_SIGN_STATE_DIR: mkdtempSync(join(tmpdir(), 'oswiki-sign-transfer-')),
     OSWIKI_MAX_BUY_ETH: '1000',
     OSWIKI_MAX_BUY_APE: '100000',
+    OSWIKI_DAILY_MAX_SEND_ETH: '3000',
+    OSWIKI_DAILY_MAX_SEND_APE: '300000',
     ...options.env,
   };
   const wallet = loadWallet(env);
@@ -171,12 +198,13 @@ function setup(options: { env?: Record<string, string>; confirmer?: HumanConfirm
   const config = settings.load();
   const world = newWorld();
   const api = mockApi();
+  api.routes.set('GET /v1/ens/resolve', ensApi(options.ensApi ?? world));
   const now = Date.parse('2026-10-10T12:00:00Z');
   const ctx: Ctx = {
     config,
     account: wallet.account,
     api: new ApiClient({ apiKey: null, fetch: api.fetch, base: 'https://api.test' }),
-    chains: createChains(config, wallet.account, { transportFor: chainId => transport(chainId, world), pollingInterval: 5 }),
+    chains: createChains(config, wallet.account, { transportFor: chainId => transport(chainId, world), pollingInterval: 5, receiptTimeoutMs: options.receiptTimeoutMs }),
     state: new TradeState(config.stateDir, config.maxTradesPerDay, () => now),
     now: () => now,
   };
@@ -200,9 +228,9 @@ describe('sending NFTs needs the user\'s dialog approval', () => {
     const confirmer = recorder();
     const h = setup({ confirmer });
     const text = await previewOk(h, { chainId: 1, to: FRIEND, items: [{ contract: NFT721, tokenId: '1' }] });
-    expect(text).toContain(`Recipient: ${FRIEND}`);
-    expect(text).toContain('ENS name of this address: friend.eth');
-    expect(text).toMatch(/on Ethereum/);
+    expect(text).toContain(`To   0x3333…3333  (friend.eth - set by the recipient, not proof of identity)\n     ${FRIEND}`);
+    expect(text).toMatch(/^APPROVE SEND · Ethereum · cannot be undone\n─{44}\n/);
+    expect(text).toMatch(/Network fee   ~.* \(max .*\)/);
     expect(text).toMatch(/approve this send in its own dialog \(always/);
     const result = await h.call('execute', { confirmId: confirmIdOf(text) });
     expect(result.isError, result.text).toBe(false);
@@ -380,19 +408,20 @@ describe('recipient safety', () => {
   it('warns loudly about a contract recipient and notes a new recipient', async () => {
     const h = setup();
     const contract = await previewOk(h, { chainId: 1, to: SAFE, items: [{ contract: NFT721, tokenId: '1' }] });
-    expect(contract).toMatch(/WARNING: the recipient is a CONTRACT on Ethereum/);
-    expect(contract).toMatch(/No ENS name/);
+    expect(contract).toMatch(/⚠ The recipient is a CONTRACT on Ethereum/);
+    expect(contract).toMatch(/no ENS name/);
     const fresh = await previewOk(h, { chainId: 1, to: FRESH, nativeAmount: '0.1' });
-    expect(fresh).toMatch(/NOTE: new recipient/);
+    expect(fresh).toMatch(/⚠ This address has never sent a transaction or held funds on Ethereum - double-check it\./);
     expect(fresh).not.toMatch(/CONTRACT/);
   });
 
   it('resolves an ENS name on Ethereum and shows the resolved address', async () => {
     const h = setup();
     const text = await previewOk(h, { chainId: 33139, to: 'Friend.eth', items: [{ contract: NFT721, tokenId: '1' }] });
-    expect(text).toContain(`Recipient: ${FRIEND}`);
-    expect(text).toContain(`ENS: friend.eth resolves to ${FRIEND} on Ethereum right now`);
-    expect(text).toMatch(/on ApeChain/);
+    expect(text).toContain(`     ${FRIEND}`);
+    expect(text).toContain('friend.eth - resolved via 2 independent sources: your Ethereum RPC and the OSWiki API; its ApeChain address (ENSIP-11) is the same');
+    expect(text).toMatch(/^APPROVE SEND · ApeChain/);
+    expect(h.api.requests.find(request => request.path === '/v1/ens/resolve')?.query).toEqual({ name: 'friend.eth', chainId: '33139' });
     const result = await h.call('execute', { confirmId: confirmIdOf(text) });
     expect(result.isError, result.text).toBe(false);
     expect(decodeFunctionData({ abi: ERC721_SAFE_TRANSFER_ABI, data: h.world.sent[0]!.data }).args[1].toLowerCase()).toBe(FRIEND);
@@ -407,7 +436,7 @@ describe('recipient safety', () => {
     h.world.forward.set('friend.eth', SAFE);
     const text = await previewOk(h, { chainId: 1, to: FRIEND, nativeAmount: '0.1' });
     expect(text).not.toContain('friend.eth');
-    expect(text).toMatch(/No ENS name/);
+    expect(text).toMatch(/no ENS name/);
   });
 });
 
@@ -436,15 +465,17 @@ describe('sending funds', () => {
     expect(reread.sentToday(1)).toBe(ETH + ETH / 2n);
   });
 
-  it('defaults the send limit to the daily buy limit and is off without one', () => {
-    expect(loadConfig({ OSWIKI_MAX_BUY_ETH: '0.5' }).dailyMaxSendWei[1]).toBe(15n * 10n ** 17n);
+  it('keeps fund sending off until a daily send limit is set, whatever the buy limits', () => {
+    expect(loadConfig({ OSWIKI_MAX_BUY_ETH: '0.5', OSWIKI_DAILY_MAX_ETH: '2' }).dailyMaxSendWei[1]).toBeNull();
+    expect(loadConfig({ OSWIKI_DAILY_MAX_SEND_ETH: '0.5' }).dailyMaxSendWei[1]).toBe(ETH / 2n);
     expect(loadConfig({ OSWIKI_DAILY_MAX_APE: '10', OSWIKI_DAILY_MAX_SEND_APE: '4' }).dailyMaxSendWei[33139]).toBe(4n * ETH);
     expect(loadConfig({}).dailyMaxSendWei[1]).toBeNull();
     expect(() => loadConfig({ OSWIKI_DAILY_MAX_SEND_ETH: 'lots' })).toThrow(/OSWIKI_DAILY_MAX_SEND_ETH/);
   });
 
   it('refuses funds when no send limit is set, but still sends NFTs', async () => {
-    const h = setup({ env: { OSWIKI_MAX_BUY_ETH: '' } });
+    const h = setup({ env: { OSWIKI_DAILY_MAX_SEND_ETH: '' } });
+    expect((await h.call('wallet_status')).text).toContain('- Ethereum fund sending: off (set a daily send limit to enable, OSWIKI_DAILY_MAX_SEND_ETH)');
     const funds = await h.call('preview_transfer', { chainId: 1, to: FRIEND, nativeAmount: '0.1' });
     expect(funds.isError).toBe(true);
     expect(funds.text).toMatch(/Sending funds on Ethereum is off until a daily send limit is set \(OSWIKI_DAILY_MAX_SEND_ETH\)/);
@@ -475,8 +506,8 @@ describe('unwrap', () => {
   it('turns WETH into ETH with withdraw and follows the normal confirmation mode', async () => {
     const h = setup({ env: { OSWIKI_CONFIRM_MODE: 'ai' }, confirmer: NO_HUMAN_CONFIRMER });
     const text = (await h.call('preview_unwrap', { chainId: 1, amount: '1.5' })).text;
-    expect(text).toMatch(/unwrap 1\.5 WETH into 1\.5 ETH/);
-    expect(text).toMatch(/Nothing leaves the wallet/);
+    expect(text).toMatch(/^APPROVE UNWRAP · Ethereum · nothing leaves the wallet/);
+    expect(text).toContain('1.5 WETH -> 1.5 ETH');
     const result = await h.call('execute', { confirmId: confirmIdOf(text) });
     expect(result.isError, result.text).toBe(false);
     expect(h.world.sent).toHaveLength(1);
@@ -527,5 +558,164 @@ describe('transaction allowlist for sends', () => {
     expect(gasLimitCap(1, { kind: 'erc20Transfer', orders: 1 })).toBe(70_000n);
     expect(gasLimitCap(1, { kind: 'unwrap', orders: 1 })).toBe(50_000n);
     expect(gasLimitCap(33139, { kind: 'transfer721', orders: 1 })).toBe(180_000n);
+  });
+});
+
+describe('ENS needs two independent sources', () => {
+  it('refuses when the OSWiki API disagrees with the Ethereum RPC', async () => {
+    const other = newWorld();
+    other.forward.set('friend.eth', SAFE);
+    const h = setup({ ensApi: other });
+    const result = await h.call('preview_transfer', { chainId: 1, to: 'friend.eth', items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/the Ethereum RPC and the OSWiki API disagree about friend\.eth \(0x3333.* vs 0x4444/);
+    expect(result.text).toMatch(/Nothing was sent/);
+  });
+
+  it('refuses ENS names when the OSWiki API is unavailable or answers garbage, and asks for the 0x address', async () => {
+    const down = setup({ ensApi: 'down' });
+    const result = await down.call('preview_transfer', { chainId: 1, to: 'friend.eth', nativeAmount: '0.1' });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/second, independent lookup through the OSWiki API, and it is unavailable right now/);
+    expect(result.text).toMatch(/full 0x address/);
+    expect((await down.call('preview_transfer', { chainId: 1, to: FRIEND, nativeAmount: '0.1' })).isError).toBe(false);
+
+    const garbage = setup();
+    garbage.api.routes.set('GET /v1/ens/resolve', () => ({ name: 'friend.eth', address: 'not-an-address', apechainAddress: null }));
+    expect((await garbage.call('preview_transfer', { chainId: 1, to: 'friend.eth', nativeAmount: '0.1' })).text).toMatch(/unavailable right now/);
+  });
+
+  it('refuses a name that resolves nowhere on both sources', async () => {
+    const h = setup();
+    const result = await h.call('preview_transfer', { chainId: 1, to: 'nobody.eth', nativeAmount: '0.1' });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/does not resolve to an address/);
+  });
+});
+
+describe('ApeChain recipients', () => {
+  it('refuses an ENS name without an ApeChain (ENSIP-11) address', async () => {
+    const h = setup();
+    h.world.coin.delete('friend.eth');
+    const result = await h.call('preview_transfer', { chainId: 33139, to: 'friend.eth', items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/friend\.eth has no ApeChain address set/);
+    expect((await h.call('preview_transfer', { chainId: 1, to: 'friend.eth', items: [{ contract: NFT721, tokenId: '1' }] })).isError).toBe(false);
+  });
+
+  it('refuses an ENS name whose ApeChain address differs from its Ethereum address', async () => {
+    const h = setup();
+    h.world.coin.set('friend.eth', SAFE as Hex);
+    const result = await h.call('preview_transfer', { chainId: 33139, to: 'friend.eth', nativeAmount: '1' });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/ApeChain address set for friend\.eth \(0x4444.*\) differs from its Ethereum address/);
+  });
+
+  it('refuses an Ethereum smart wallet that has no code on ApeChain, at preview and at execute', async () => {
+    const h = setup();
+    h.world.apeCode = new Map([[NFT721, '0x60' as Hex]]);
+    const result = await h.call('preview_transfer', { chainId: 33139, to: SAFE, items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/this looks like an Ethereum smart wallet that may not exist on ApeChain/);
+
+    h.world.apeCode = null;
+    const text = await previewOk(h, { chainId: 33139, to: SAFE, items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(text).toMatch(/The recipient is a CONTRACT on ApeChain/);
+    h.world.apeCode = new Map([[NFT721, '0x60' as Hex]]);
+    const execute = await h.call('execute', { confirmId: confirmIdOf(text) });
+    expect(execute.isError).toBe(true);
+    expect(execute.text).toMatch(/Ethereum smart wallet/);
+    expect(h.world.sent).toHaveLength(0);
+  });
+
+  it('allows an EIP-7702 delegated wallet on Ethereum and plain wallets', async () => {
+    const h = setup();
+    h.world.apeCode = new Map([[NFT721, '0x60' as Hex]]);
+    h.world.code.set(FRIEND, `0xef0100${'ab'.repeat(20)}` as Hex);
+    expect((await h.call('preview_transfer', { chainId: 33139, to: FRIEND, items: [{ contract: NFT721, tokenId: '1' }] })).isError).toBe(false);
+  });
+});
+
+describe('sent but not confirmed', () => {
+  function tracked(h: ReturnType<typeof setup>) {
+    (h.ctx.chains as { tracker?: PendingTracker }).tracker = h.ctx.state;
+  }
+
+  it('reports a broadcast tx whose receipt timed out as SENT, keeps it pending, never says nothing was sent', async () => {
+    const h = setup({ receiptTimeoutMs: 50 });
+    tracked(h);
+    const text = await previewOk(h, { chainId: 1, to: FRIEND, items: [{ contract: NFT721, tokenId: '1' }] });
+    h.world.mine = false;
+    const result = await h.call('execute', { confirmId: confirmIdOf(text) });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/Sent to 0x3333.*, but NOT YET CONFIRMED/);
+    expect(result.text).toMatch(/SENT, not yet confirmed: 0x[0-9a-f]{64} - do not retry; check the explorer: etherscan\.io\/tx\/0x[0-9a-f]{64}/);
+    expect(result.text).not.toMatch(/Nothing was sent/);
+    expect(h.ctx.state.pendingTxs(1)).toHaveLength(1);
+  });
+
+  it('lists confirmed and unconfirmed transfers separately when a later one times out', async () => {
+    const h = setup({ receiptTimeoutMs: 50 });
+    const text = await previewOk(h, { chainId: 1, to: FRIEND, items: [{ contract: NFT721, tokenId: '1' }, { contract: NFT721, tokenId: '2' }] });
+    h.world.revert = (_call, world) => {
+      if (world.sent.length >= 1) world.mine = false;
+      return null;
+    };
+    const result = await h.call('execute', { confirmId: confirmIdOf(text) });
+    expect(result.text).toMatch(/Partly sent to 0x3333/);
+    expect(result.text).toMatch(/#1: sent, transaction 0x[0-9a-f]{64} confirmed/);
+    expect(result.text).toMatch(/#2: SENT, not yet confirmed/);
+    expect(result.text).not.toMatch(/Nothing was sent/);
+  });
+
+  it('treats an RPC timeout on broadcast as maybe sent and keeps it pending', async () => {
+    const h = setup();
+    tracked(h);
+    const text = await previewOk(h, { chainId: 1, to: FRIEND, items: [{ contract: NFT721, tokenId: '1' }] });
+    h.world.broadcastFails = true;
+    const result = await h.call('execute', { confirmId: confirmIdOf(text) });
+    expect(result.text).toMatch(/MAY HAVE BEEN SENT, not confirmed: 0x[0-9a-f]{64}/);
+    expect(result.text).not.toMatch(/Nothing was sent/);
+    expect(h.ctx.state.pendingTxs(1)).toHaveLength(1);
+  });
+
+  it('reports the same way on the shared path used by unwraps, buys and cancels', async () => {
+    const h = setup({ env: { OSWIKI_CONFIRM_MODE: 'off' }, receiptTimeoutMs: 50 });
+    const text = (await h.call('preview_unwrap', { chainId: 1, amount: '1' })).text;
+    h.world.mine = false;
+    const result = await h.call('execute', { confirmId: confirmIdOf(text) });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/SENT, not yet confirmed: 0x[0-9a-f]{64} - do not retry; check the explorer: etherscan\.io\/tx\/0x/);
+    expect(result.text).not.toMatch(/Nothing was sent/);
+  });
+});
+
+describe('recipient names and addresses', () => {
+  it('labels a reverse name as set by the recipient and flags non-ASCII names loudly', async () => {
+    const h = setup();
+    h.world.forward.set('café.eth', FRIEND);
+    h.world.coin.set('café.eth', FRIEND as Hex);
+    h.world.reverse.set(FRIEND, 'café.eth');
+    h.world.forward.delete('friend.eth');
+    const reverse = await previewOk(h, { chainId: 1, to: FRIEND, items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(reverse).toContain('café.eth - set by the recipient, not proof of identity');
+    expect(reverse).toMatch(/⚠ The ENS name café\.eth contains non-ASCII or punycode characters and may imitate another name/);
+    const forward = await previewOk(h, { chainId: 1, to: 'café.eth', items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(forward).toMatch(/café\.eth - resolved via 2 independent sources/);
+    expect(forward).toMatch(/⚠ The ENS name café\.eth contains non-ASCII/);
+  });
+
+  it('accepts EIP-55 checksummed, all-lowercase and all-uppercase addresses and refuses a bad checksum', async () => {
+    const h = setup();
+    const good = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
+    for (const to of [good, good.toLowerCase(), `0x${good.slice(2).toUpperCase()}`]) {
+      const result = await h.call('preview_transfer', { chainId: 1, to, items: [{ contract: NFT721, tokenId: '1' }] });
+      expect(result.isError, result.text).toBe(false);
+    }
+    const bad = await h.call('preview_transfer', { chainId: 1, to: '0xF39Fd6e51aad88F6F4ce6aB8827279cffFb92266', items: [{ contract: NFT721, tokenId: '1' }] });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toMatch(/fails its EIP-55 checksum/);
+    const badContract = await h.call('preview_transfer', { chainId: 1, to: FRIEND, items: [{ contract: '0x790B2cf29ed4f310bf7641f013c65d4560d28371', tokenId: '1' }] });
+    expect(badContract.text).toMatch(/collection address .* fails its EIP-55 checksum/);
   });
 });

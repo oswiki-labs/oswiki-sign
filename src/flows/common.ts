@@ -1,4 +1,4 @@
-import { encodeFunctionData, type Address, type Hex, type PrivateKeyAccount, type PublicClient } from 'viem';
+import { encodeFunctionData, getAddress, type Address, type Hex, type PrivateKeyAccount, type PublicClient } from 'viem';
 
 import { ERC1155_INTERFACE_ID, NFT_ABI } from '../abi.js';
 import type { ApiClient, BatchResult } from '../api.js';
@@ -54,6 +54,18 @@ export function unacceptedIndexes(signed: Array<{ orderHash: string }>, result: 
 }
 
 export const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/** EIP-55: all-lowercase or all-uppercase hex carries no checksum; mixed case must match it exactly. */
+export function hasValidChecksum(value: string): boolean {
+  const hex = value.slice(2);
+  if (hex === hex.toLowerCase() || hex === hex.toUpperCase()) return true;
+  try {
+    return getAddress(value) === value;
+  } catch {
+    return false;
+  }
+}
+
 export const TOKEN_ID_RE = /^(0|[1-9][0-9]{0,77})$/;
 export const ORDER_ID_RE = /^oswiki-0x[0-9a-fA-F]{64}$/;
 

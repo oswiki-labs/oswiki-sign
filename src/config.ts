@@ -117,8 +117,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     maxBuyWei,
     dailyMaxWei,
     dailyMaxSendWei: {
-      [MAINNET_ID]: readCap(env.OSWIKI_DAILY_MAX_SEND_ETH, 'OSWIKI_DAILY_MAX_SEND_ETH') ?? dailyMaxWei[MAINNET_ID],
-      [APECHAIN_ID]: readCap(env.OSWIKI_DAILY_MAX_SEND_APE, 'OSWIKI_DAILY_MAX_SEND_APE') ?? dailyMaxWei[APECHAIN_ID],
+      [MAINNET_ID]: readCap(env.OSWIKI_DAILY_MAX_SEND_ETH, 'OSWIKI_DAILY_MAX_SEND_ETH'),
+      [APECHAIN_ID]: readCap(env.OSWIKI_DAILY_MAX_SEND_APE, 'OSWIKI_DAILY_MAX_SEND_APE'),
     },
     minListFloorPct: readInt(env.OSWIKI_MIN_LIST_FLOOR_PCT, 50, 'OSWIKI_MIN_LIST_FLOOR_PCT', 0, 100),
     maxTradesPerDay: readInt(env.OSWIKI_MAX_TRADES_PER_DAY, 50, 'OSWIKI_MAX_TRADES_PER_DAY', 0, 100000),

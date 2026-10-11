@@ -1,10 +1,16 @@
 import {
+  BaseError,
   createPublicClient,
   createWalletClient,
   decodeFunctionData,
   formatUnits,
   http,
+  HttpRequestError,
+  keccak256,
   maxUint256,
+  SocketClosedError,
+  TimeoutError,
+  WebSocketRequestError,
   type Address,
   type Chain,
   type Hex,
@@ -46,9 +52,10 @@ export interface Chains {
   wallet(chainId: SupportedChainId): WalletClient;
   maxFeePerGas(chainId: SupportedChainId): bigint;
   tracker?: PendingTracker;
+  receiptTimeoutMs?: number;
 }
 
-export function createChains(config: Config, account: PrivateKeyAccount, options: { transportFor?: (chainId: SupportedChainId) => Transport; pollingInterval?: number; tracker?: PendingTracker } = {}): Chains {
+export function createChains(config: Config, account: PrivateKeyAccount, options: { transportFor?: (chainId: SupportedChainId) => Transport; pollingInterval?: number; tracker?: PendingTracker; receiptTimeoutMs?: number } = {}): Chains {
   const publics = new Map<number, PublicClient>();
   const wallets = new Map<number, WalletClient>();
   const transport = (chainId: SupportedChainId) => options.transportFor?.(chainId) ?? http(config.rpc[chainId], { timeout: 30_000, retryCount: 1 });
@@ -71,7 +78,26 @@ export function createChains(config: Config, account: PrivateKeyAccount, options
     },
     maxFeePerGas: chainId => config.maxFeePerGasWei[chainId],
     tracker: options.tracker,
+    receiptTimeoutMs: options.receiptTimeoutMs,
   };
+}
+
+const EXPLORER_TX: Record<SupportedChainId, string> = { [MAINNET_ID]: 'etherscan.io/tx/', [APECHAIN_ID]: 'apescan.io/tx/' };
+const CHAIN_LABEL: Record<SupportedChainId, string> = { [MAINNET_ID]: 'Ethereum', [APECHAIN_ID]: 'ApeChain' };
+
+/** The transaction was (or may have been) broadcast: it can still land, so callers must never report it as not sent. */
+export class UnconfirmedTxError extends Error {
+  constructor(readonly chainId: SupportedChainId, readonly hash: Hex, readonly broadcastUncertain = false) {
+    const head = broadcastUncertain
+      ? `MAY HAVE BEEN SENT, not confirmed: ${hash} (the RPC did not answer the broadcast)`
+      : `SENT, not yet confirmed: ${hash}`;
+    super(`${head} - do not retry; check the explorer: ${EXPLORER_TX[chainId]}${hash}. It stays tracked as pending: nothing new is sent on ${CHAIN_LABEL[chainId]} until it confirms or is replaced.`);
+    this.name = 'UnconfirmedTxError';
+  }
+}
+
+function isTransportFailure(err: unknown): boolean {
+  return err instanceof BaseError && err.walk(e => e instanceof HttpRequestError || e instanceof TimeoutError || e instanceof WebSocketRequestError || e instanceof SocketClosedError) !== null;
 }
 
 export class TxRefusedError extends Error {
@@ -348,13 +374,22 @@ export async function sendGuardedTx(chains: Chains, account: PrivateKeyAccount, 
   const fees = await cappedFees(chains, tx.chainId);
   const nonce = await client.getTransactionCount({ address: account.address, blockTag: 'pending' });
 
-  const hash = await chains.wallet(tx.chainId).sendTransaction({ account, chain: CHAINS[tx.chainId], to: tx.to, data: tx.data, value: tx.value, gas, nonce, ...fees });
-  chains.tracker?.addPending({ chainId: tx.chainId, hash, nonce, label: shape.kind, sentAt: Date.now() });
+  const serializedTransaction = await account.signTransaction({ type: 'eip1559', chainId: tx.chainId, to: tx.to, data: tx.data, value: tx.value, gas, nonce, ...fees });
+  const hash = keccak256(serializedTransaction);
+  const track = () => chains.tracker?.addPending({ chainId: tx.chainId, hash, nonce, label: shape.kind, sentAt: Date.now() });
+  try {
+    await client.sendRawTransaction({ serializedTransaction });
+  } catch (err) {
+    if (!isTransportFailure(err)) throw err;
+    track();
+    throw new UnconfirmedTxError(tx.chainId, hash, true);
+  }
+  track();
   let receipt;
   try {
-    receipt = await client.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS });
+    receipt = await client.waitForTransactionReceipt({ hash, timeout: chains.receiptTimeoutMs ?? RECEIPT_TIMEOUT_MS });
   } catch {
-    throw new Error(`Transaction ${hash} was sent but is not confirmed yet. It stays tracked: nothing new is sent on this chain until it confirms or is replaced.`);
+    throw new UnconfirmedTxError(tx.chainId, hash);
   }
   chains.tracker?.removePending(hash);
   if (receipt.status !== 'success') throw new Error(`Transaction ${hash} reverted on-chain.`);

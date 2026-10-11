@@ -85,6 +85,8 @@ export type CollectionMode = 'any' | 'allow' | 'block';
 export interface Limits {
   maxBuyEth: string | null;
   maxBuyApe: string | null;
+  dailyMaxSendEth?: string | null;
+  dailyMaxSendApe?: string | null;
   minListFloorPct: string;
   maxTradesPerDay: string;
   dryRun: boolean;
@@ -151,6 +153,8 @@ export function serverEnv(keyFile: string, limits: Limits): Record<string, strin
   };
   if (limits.maxBuyEth !== null) env.OSWIKI_MAX_BUY_ETH = limits.maxBuyEth;
   if (limits.maxBuyApe !== null) env.OSWIKI_MAX_BUY_APE = limits.maxBuyApe;
+  if (limits.dailyMaxSendEth) env.OSWIKI_DAILY_MAX_SEND_ETH = limits.dailyMaxSendEth;
+  if (limits.dailyMaxSendApe) env.OSWIKI_DAILY_MAX_SEND_APE = limits.dailyMaxSendApe;
   env.OSWIKI_MIN_LIST_FLOOR_PCT = limits.minListFloorPct;
   env.OSWIKI_MAX_TRADES_PER_DAY = limits.maxTradesPerDay;
   env.OSWIKI_CONFIRM_MODE = limits.confirmOff ? 'off' : 'human';
@@ -317,6 +321,15 @@ async function askAmount(io: Prompter, question: string, fallback: string): Prom
   }
 }
 
+async function askOptionalAmount(io: Prompter, question: string): Promise<string | null> {
+  for (;;) {
+    const answer = (await io.ask(`${question} [skip]: `)).trim().toLowerCase();
+    if (answer === '' || answer === 'skip') return null;
+    if (AMOUNT_RE.test(answer) && /[1-9]/.test(answer)) return answer;
+    io.print('Enter an amount like 0.05, or press Enter to skip.');
+  }
+}
+
 async function askInt(io: Prompter, question: string, fallback: string, max: number): Promise<string> {
   for (;;) {
     const answer = (await io.ask(`${question} [${fallback}]: `)).trim();
@@ -426,7 +439,7 @@ async function chatOverridesStep(deps: SetupDeps, wallet: WalletResult): Promise
   return {};
 }
 
-async function limitsStep(deps: SetupDeps): Promise<Pick<Limits, 'maxBuyEth' | 'maxBuyApe' | 'minListFloorPct' | 'maxTradesPerDay' | 'dryRun'>> {
+async function limitsStep(deps: SetupDeps): Promise<Pick<Limits, 'maxBuyEth' | 'maxBuyApe' | 'dailyMaxSendEth' | 'dailyMaxSendApe' | 'minListFloorPct' | 'maxTradesPerDay' | 'dryRun'>> {
   const { io } = deps;
   io.print('');
   io.print(paint(deps.color).bold('2/5 Limits'));
@@ -435,7 +448,10 @@ async function limitsStep(deps: SetupDeps): Promise<Pick<Limits, 'maxBuyEth' | '
   const minListFloorPct = await askInt(io, 'Floor guard, % of floor (0 = off)', '50', 100);
   const maxTradesPerDay = await askInt(io, 'Trades per day', '50', 100000);
   const dryRun = await askYesNo(io, 'Dry run (nothing is sent)?', false);
-  return { maxBuyEth, maxBuyApe, minListFloorPct, maxTradesPerDay, dryRun };
+  io.print('Sending ETH/APE and WETH/WAPE to other wallets stays off until you set a daily send limit (NFT sends work without one).');
+  const dailyMaxSendEth = await askOptionalAmount(io, 'Daily send limit, ETH + WETH (skip = off)');
+  const dailyMaxSendApe = await askOptionalAmount(io, 'Daily send limit, APE + WAPE (skip = off)');
+  return { maxBuyEth, maxBuyApe, dailyMaxSendEth, dailyMaxSendApe, minListFloorPct, maxTradesPerDay, dryRun };
 }
 
 interface FoundCollection {

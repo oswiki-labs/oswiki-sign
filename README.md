@@ -7,7 +7,7 @@ The private key stays on your machine. The AI never sees it, the hosted OSWiki M
 ## Quick setup
 
 ```sh
-npx -y @oswikixyz/sign@0.2.0 setup
+npx -y @oswikixyz/sign@0.2.1 setup
 ```
 
 Run it in a terminal (Node.js 20 or newer). Five short steps:
@@ -18,7 +18,7 @@ Run it in a terminal (Node.js 20 or newer). Five short steps:
 4. **Confirmation**: every trade waits for your OK in oswiki-sign's own dialog (recommended), or the AI may trade on its own within your limits (`OSWIKI_CONFIRM_MODE=off`, see [Confirmation dialog](#confirmation-dialog)).
 5. **Client**: adds oswiki-sign to Claude Code (`claude mcp add --scope user`), Cursor (`~/.cursor/mcp.json`) or Claude Desktop (`claude_desktop_config.json`), or prints the config. The config holds only the path of the key file and the exact version. For Claude Code it also offers the [hardening](#claude-code-hardening) deny rules.
 
-Every file it changes is backed up first (`<file>.bak-<time>`), other MCP servers and settings are kept, and an existing key file is only replaced if you confirm it (it is then moved to `key.bak-<time>`). Run setup again to change anything; it keeps your wallet. Colors are off with `NO_COLOR` or when the output is not a terminal. `npx -y @oswikixyz/sign@0.2.0 setup --help` shows the steps. To do everything by hand instead, see [Manual setup](#manual-setup).
+Every file it changes is backed up first (`<file>.bak-<time>`), other MCP servers and settings are kept, and an existing key file is only replaced if you confirm it (it is then moved to `key.bak-<time>`). Run setup again to change anything; it keeps your wallet. Colors are off with `NO_COLOR` or when the output is not a terminal. `npx -y @oswikixyz/sign@0.2.1 setup --help` shows the steps. To do everything by hand instead, see [Manual setup](#manual-setup).
 
 ## How it works
 
@@ -49,9 +49,11 @@ When the AI calls `execute`, oswiki-sign itself opens a confirmation dialog in y
 `preview_transfer` sends NFTs and funds from the trading wallet to one other wallet on one chain, in one approval: any number of NFTs (up to 50; ERC-721, and ERC-1155 with an amount), ETH/APE and WETH/WAPE. ERC-721 tokens go one `safeTransferFrom` each, ERC-1155 ids of one contract go in one `safeBatchTransferFrom` (or `safeTransferFrom` for a single id); the transactions are sent one after another with the usual pending-transaction safety.
 
 - **Always your approval.** Every send is shown to you in oswiki-sign's own dialog (chain, every item and amount, the full recipient address, its ENS name and any warnings) and only goes out when you approve it there. This holds in every confirmation mode, also with `OSWIKI_CONFIRM_MODE=off` or `ai`. Clients that cannot show the dialog cannot send; send from your wallet app instead. The AI is told to send only to an address or ENS name you gave it yourself.
-- **Recipient checks.** The recipient is a full `0x` address or an ENS name (resolved on Ethereum, the preview shows the address it resolves to). The zero and burn addresses, the token's own contract, the WETH/WAPE contract, marketplace contracts and the wallet itself are refused. A contract recipient gets a loud warning, an address that has never been used gets a note.
+- **Recipient checks.** The recipient is a full `0x` address or an ENS name. A mixed-case address must pass its EIP-55 checksum (all-lowercase and all-uppercase are accepted). An ENS name is resolved twice, independently: through your Ethereum RPC and through the OSWiki API. Both must agree, or the name is refused; when the OSWiki API is unreachable, ENS names are refused and you are asked for the `0x` address. On ApeChain the name must also have an ApeChain address set (ENSIP-11, coin type 2147516787) equal to its Ethereum address. The zero and burn addresses, the token's own contract, the WETH/WAPE contract, marketplace contracts and the wallet itself are refused. On ApeChain, an address that is a smart contract on Ethereum but has no code on ApeChain is refused (an Ethereum smart wallet may not exist on ApeChain). A contract recipient gets a loud warning, and so does an address that has never sent a transaction or held funds on that chain. A reverse ENS name is shown as set by the recipient, not as proof of identity; names with non-ASCII or punycode characters get a look-alike warning.
 - **Checked on-chain first.** Ownership (`ownerOf` / `balanceOf`) and balances are read from the chain, and every transfer is simulated. When a collection does not let you send a token (for example ERC721-C transfer rules), or the simulation reverts, the preview names each item it affects instead of sending the rest silently.
-- **Limits.** Sent ETH plus WETH (APE plus WAPE) count toward `OSWIKI_DAILY_MAX_SEND_ETH` / `OSWIKI_DAILY_MAX_SEND_APE`; every sent NFT counts as one trade toward `OSWIKI_MAX_TRADES_PER_DAY`; `OSWIKI_BLOCKED_COLLECTIONS` and `OSWIKI_ALLOWED_COLLECTIONS` apply. Gas limit caps per transaction: 90k (ERC-721), 80k (one ERC-1155 id), 60k + 40k per id (ERC-1155 batch), 70k (WETH/WAPE), 21k for ETH on Ethereum (so plain ETH to a contract wallet is refused: send WETH instead), 150k for APE on ApeChain.
+- **Limits.** Sending ETH/WETH or APE/WAPE is off until you set a daily send limit (`OSWIKI_DAILY_MAX_SEND_ETH` / `OSWIKI_DAILY_MAX_SEND_APE`, in setup or with `update_limits` and your approval); sending NFTs works without one. Sent ETH plus WETH (APE plus WAPE) count toward that limit; every sent NFT counts as one trade toward `OSWIKI_MAX_TRADES_PER_DAY`; `OSWIKI_BLOCKED_COLLECTIONS` and `OSWIKI_ALLOWED_COLLECTIONS` apply. Gas limit caps per transaction: 90k (ERC-721), 80k (one ERC-1155 id), 60k + 40k per id (ERC-1155 batch), 70k (WETH/WAPE), 21k for ETH on Ethereum (so plain ETH to a contract wallet is refused: send WETH instead), 150k for APE on ApeChain.
+
+- **Sent but not confirmed.** When a transaction was broadcast but its receipt did not arrive in time (or the RPC did not answer the broadcast), it is reported as SENT, not yet confirmed, with its hash: do not retry, check the explorer. It stays tracked as pending, and nothing new is sent on that chain until it confirms or is replaced.
 
 `preview_unwrap` turns WETH/WAPE back into ETH/APE in the same wallet (`withdraw`). Nothing leaves the wallet, so it follows the normal confirmation mode.
 
@@ -68,7 +70,7 @@ When the collection has on-chain ERC-2981 royalty info, the royalty in a preview
 
 ## Manual setup
 
-[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.2.0`), never `latest` or a range, and update only on purpose.
+[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.2.1`), never `latest` or a range, and update only on purpose.
 
 ### 1. Store the key in a file
 
@@ -103,7 +105,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
   "mcpServers": {
     "oswiki-sign": {
       "command": "npx",
-      "args": ["-y", "@oswikixyz/sign@0.2.0"],
+      "args": ["-y", "@oswikixyz/sign@0.2.1"],
       "env": {
         "OSWIKI_WALLET_KEY_FILE": "/Users/you/.oswiki-sign/key",
         "OSWIKI_DRY_RUN": "1",
@@ -115,7 +117,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
 }
 ```
 
-If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.2.0"]`.
+If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.2.1"]`.
 
 Claude Code (user scope, so it is stored in `~/.claude.json` and not in a project):
 
@@ -125,15 +127,15 @@ claude mcp add --scope user oswiki-sign \
   -e OSWIKI_DRY_RUN=1 \
   -e OSWIKI_MAX_BUY_ETH=0.5 \
   -e OSWIKI_MAX_BUY_APE=500 \
-  -- npx -y @oswikixyz/sign@0.2.0
+  -- npx -y @oswikixyz/sign@0.2.1
 ```
 
-On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.2.0`.
+On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.2.1`.
 
 Check the setup from a terminal with the same environment variables set:
 
 ```sh
-npx -y @oswikixyz/sign@0.2.0 status
+npx -y @oswikixyz/sign@0.2.1 status
 ```
 
 When the dry-run previews look right, remove `OSWIKI_DRY_RUN` (or set it to `0`) and restart the client.
@@ -202,8 +204,8 @@ Every release is built and published by the [release workflow](.github/workflows
 | `OSWIKI_CONFIRM_MODE` | `human` | `human`: every `execute` must be approved by you in oswiki-sign's own confirmation dialog; clients without that dialog cannot execute. `ai`: the dialog is still used when the client has it; on clients without it, the AI's word counts as your confirmation. `off`: never a dialog, the AI may trade on its own within your limits (a manipulated text could trigger a trade within them; see [Confirmation dialog](#confirmation-dialog)). `ai` and `off` are announced loudly at startup, in previews and in `wallet_status`. |
 | `OSWIKI_DAILY_MAX_ETH` | 3x `OSWIKI_MAX_BUY_ETH` | Total ETH that buys plus new offers may use per UTC day on Ethereum. |
 | `OSWIKI_DAILY_MAX_APE` | 3x `OSWIKI_MAX_BUY_APE` | Same on ApeChain, in APE. |
-| `OSWIKI_DAILY_MAX_SEND_ETH` | `OSWIKI_DAILY_MAX_ETH` | Total ETH plus WETH that may be sent to other wallets per UTC day on Ethereum. Without it (and without a daily buy limit) sending funds on Ethereum is off; NFTs can still be sent. |
-| `OSWIKI_DAILY_MAX_SEND_APE` | `OSWIKI_DAILY_MAX_APE` | Same on ApeChain, APE plus WAPE. |
+| `OSWIKI_DAILY_MAX_SEND_ETH` | off | Total ETH plus WETH that may be sent to other wallets per UTC day on Ethereum. Without it sending funds on Ethereum is off (it does not follow the buy limits); NFTs can still be sent. |
+| `OSWIKI_DAILY_MAX_SEND_APE` | off | Same on ApeChain, APE plus WAPE. |
 | `OSWIKI_MAX_CANCELS_PER_DAY` | 200 | Cancelled orders per UTC day (each order counts). |
 | `OSWIKI_MAX_GWEI` | 200 | Highest max fee per gas on Ethereum; transactions are refused above it. |
 | `OSWIKI_MAX_GWEI_APECHAIN` | 1000 | Same on ApeChain. |

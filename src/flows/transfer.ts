@@ -2,15 +2,15 @@ import { encodeFunctionData, zeroAddress, type Address, type Hex, type PublicCli
 
 import { WRAPPED_NATIVE_ABI } from '../abi.js';
 import { sanitizeServerText } from '../api.js';
-import { gasLimitCap, networkFee, sendGuardedTx, type SendTarget, type TxKind, type TxRequest } from '../chain.js';
+import { gasLimitCap, MAX_GWEI_VARIABLE, networkFee, sendGuardedTx, UnconfirmedTxError, type NetworkFee, type SendTarget, type TxKind, type TxRequest } from '../chain.js';
 import type { Config } from '../config.js';
 import { APECHAIN_ID, MAINNET_ID, NATIVE_SYMBOL, OPENSEA_CONDUIT_ADDRESS, SEAPORT_ADDRESS, WRAPPED_NATIVE, WRAPPED_SYMBOL, type SupportedChainId } from '../constants.js';
 import { native, parsePositiveAmount, PriceInputError, wrapped } from '../format.js';
 import { isConduitRestriction, revertMessage } from '../seaport/fulfill.js';
 import type { Charge, Limits } from '../state.js';
 import { ERC1155_TRANSFER_ABI, ERC721_SAFE_TRANSFER_ABI, WRAPPED_TRANSFER_ABI } from '../transfer-abi.js';
-import { ADDRESS_RE, chainOf, GuardError, me, readIsErc1155, TOKEN_ID_RE, type Ctx } from './common.js';
-import { looksLikeEnsName, normalizeEnsName, resolveEnsName, reverseEnsName } from './ens.js';
+import { ADDRESS_RE, chainOf, GuardError, hasValidChecksum, me, readIsErc1155, TOKEN_ID_RE, type Ctx } from './common.js';
+import { isConfusableName, looksLikeEnsName, resolveEnsVerified, reverseEnsName } from './ens.js';
 
 export const MAX_TRANSFER_ITEMS = 50;
 
@@ -89,18 +89,18 @@ function amountOf(value: Amount | undefined, field: string): bigint {
   }
 }
 
-async function resolveRecipient(ctx: Ctx, input: string): Promise<{ address: Address; ensInput: string | null }> {
+function checksummed(value: string, what: string): void {
+  if (!hasValidChecksum(value)) throw new GuardError(`Refused: ${what} ${value} mixes upper and lower case but fails its EIP-55 checksum, so it is probably mistyped. Ask the user to copy the address again. Nothing was sent.`);
+}
+
+async function resolveRecipient(ctx: Ctx, chainId: SupportedChainId, input: string): Promise<{ address: Address; ensInput: string | null }> {
   const value = (input ?? '').trim();
-  if (ADDRESS_RE.test(value)) return { address: value.toLowerCase() as Address, ensInput: null };
-  if (!looksLikeEnsName(value)) throw new GuardError('The recipient must be a full 0x address (40 hex characters) or an ENS name like name.eth that the user gave you. Nothing was sent.');
-  const name = normalizeEnsName(value);
-  let address: Address | null;
-  try {
-    address = await resolveEnsName(ctx.chains.client(MAINNET_ID), name);
-  } catch {
-    throw new GuardError(`Could not look up the ENS name ${name} on Ethereum right now. Try again, or ask the user for the full 0x address. Nothing was sent.`);
+  if (ADDRESS_RE.test(value)) {
+    checksummed(value, 'the recipient');
+    return { address: value.toLowerCase() as Address, ensInput: null };
   }
-  if (!address) throw new GuardError(`The ENS name ${name} does not resolve to an address (or uses an off-chain resolver this signer does not follow). Ask the user for the full 0x address. Nothing was sent.`);
+  if (!looksLikeEnsName(value)) throw new GuardError('The recipient must be a full 0x address (40 hex characters) or an ENS name like name.eth that the user gave you. Nothing was sent.');
+  const { name, address } = await resolveEnsVerified(ctx.chains.client(MAINNET_ID), ctx.api, value, chainId);
   return { address, ensInput: name };
 }
 
@@ -247,6 +247,7 @@ async function buildGroups(ctx: Ctx, chainId: SupportedChainId, items: NonNullab
   for (const item of items) {
     const contract = item.contract.trim();
     if (!ADDRESS_RE.test(contract)) throw new GuardError(`"${contract.slice(0, 60)}" is not a 0x collection address. Nothing was sent.`);
+    checksummed(contract, 'the collection address');
     if (!TOKEN_ID_RE.test(item.tokenId)) throw new GuardError(`Token id "${String(item.tokenId).slice(0, 80)}" must be a decimal number. Nothing was sent.`);
     const key = `${contract.toLowerCase()}:${item.tokenId}`;
     if (seen.has(key)) throw new GuardError(`${contract.toLowerCase()} #${item.tokenId} is listed twice; pass each token once (use amount for ERC-1155). Nothing was sent.`);
@@ -283,19 +284,56 @@ async function recipientFacts(ctx: Ctx, chainId: SupportedChainId, recipient: Ad
   ]);
   const hasCode = code !== undefined && code !== '0x' && code.length > 2;
   const delegated = hasCode && code!.toLowerCase().startsWith(EIP7702_PREFIX);
+  if (chainId === APECHAIN_ID && !hasCode) await assertNotEthereumOnlyContract(ctx, recipient);
   return { isContract: hasCode && !delegated, delegated, fresh: nonce === 0 && balance === 0n && !hasCode, name };
 }
 
-function recipientLines(plan: TransferPlan, ensInput: string | null, facts: RecipientFacts): string[] {
+async function assertNotEthereumOnlyContract(ctx: Ctx, recipient: Address): Promise<void> {
+  let code: Hex | undefined;
+  try {
+    code = await ctx.chains.client(MAINNET_ID).getCode({ address: recipient });
+  } catch {
+    throw new GuardError(`Could not check ${recipient} on Ethereum right now (ApeChain sends check that the recipient is not an Ethereum-only smart wallet). Try again. Nothing was sent.`);
+  }
+  if (code && code !== '0x' && !code.toLowerCase().startsWith(EIP7702_PREFIX)) {
+    throw new GuardError(`Refused: ${recipient} is a smart contract on Ethereum but has no code on ApeChain; this looks like an Ethereum smart wallet that may not exist on ApeChain, and anything sent there could be lost for good. Ask the user for an address they control on ApeChain. Nothing was sent.`);
+  }
+}
+
+const CARD_RULE = '─'.repeat(44);
+
+function card(title: string, sections: string[][]): string {
+  return [title, ...sections.filter(section => section.length > 0).flatMap(section => [CARD_RULE, ...section])].join('\n');
+}
+
+function shortAddress(address: string): string {
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+function feeRow(fee: NetworkFee, chainId: SupportedChainId): string[] {
+  const now = fee.nowWei === null ? 'estimate unavailable' : `~${native(fee.nowWei, chainId)}`;
+  const rows = [`Network fee   ${now} (max ${native(fee.maxWei, chainId)}, ${MAX_GWEI_VARIABLE[chainId]})`];
+  if (/execute will refuse/.test(fee.text)) rows.push(`⚠ Gas is above ${MAX_GWEI_VARIABLE[chainId]} right now, so execute will refuse until it drops.`);
+  return rows;
+}
+
+function recipientRows(plan: TransferPlan, ensInput: string | null, facts: RecipientFacts): string[] {
   const { chainId, recipient } = plan;
-  const lines = [`Recipient: ${recipient}`];
-  if (ensInput) lines.push(`  ENS: ${ensInput} resolves to ${recipient} on Ethereum right now. Check the full address with the user.`);
-  else if (facts.name) lines.push(`  ENS name of this address: ${facts.name}`);
-  else lines.push('  No ENS name. Check the full address with the user character by character.');
-  if (facts.isContract) lines.push(`  WARNING: the recipient is a CONTRACT on ${CHAIN_NAME[chainId]}, not a plain wallet. Only send if the user knows it is their smart wallet (e.g. a Safe) or a contract that can hand the items on; anything else may be lost for good.`);
-  if (facts.delegated) lines.push('  NOTE: the recipient is a wallet with an EIP-7702 smart-account delegation.');
-  if (facts.fresh) lines.push(`  NOTE: new recipient: this address has never sent a transaction and holds no ${NATIVE_SYMBOL[chainId]} on ${CHAIN_NAME[chainId]}. Make sure it is the right address.`);
-  return lines;
+  let label = 'no ENS name - check every character with the user';
+  if (ensInput) label = `${ensInput} - resolved via 2 independent sources: your Ethereum RPC and the OSWiki API${chainId === APECHAIN_ID ? '; its ApeChain address (ENSIP-11) is the same' : ''}`;
+  else if (facts.name) label = `${facts.name} - set by the recipient, not proof of identity`;
+  return [`To   ${shortAddress(recipient)}  (${label})`, `     ${recipient}`];
+}
+
+function recipientWarnings(plan: TransferPlan, ensInput: string | null, facts: RecipientFacts): string[] {
+  const { chainId } = plan;
+  const warnings: string[] = [];
+  const shown = ensInput ?? facts.name;
+  if (shown && isConfusableName(shown)) warnings.push(`⚠ The ENS name ${shown} contains non-ASCII or punycode characters and may imitate another name. Do not trust the name: confirm the full 0x address with the user character by character.`);
+  if (facts.isContract) warnings.push(`⚠ The recipient is a CONTRACT on ${CHAIN_NAME[chainId]}, not a plain wallet. Only send if the user knows it is their smart wallet (e.g. a Safe) or a contract that can hand the items on; anything else may be lost for good.`);
+  if (facts.delegated) warnings.push('Note: the recipient is a wallet with an EIP-7702 smart-account delegation.');
+  if (facts.fresh) warnings.push(`⚠ This address has never sent a transaction or held funds on ${CHAIN_NAME[chainId]} - double-check it.`);
+  return warnings;
 }
 
 /** Everything a send needs checked against the chain right now; throws with per-item reasons. */
@@ -329,7 +367,7 @@ export async function previewTransfer(ctx: Ctx, input: TransferInput): Promise<{
   const wrappedWei = amountOf(input.wrappedAmount, 'wrappedAmount');
   if (items.length === 0 && nativeWei === 0n && wrappedWei === 0n) throw new GuardError('Nothing to send: pass items (NFTs) and/or nativeAmount / wrappedAmount. Nothing was sent.');
 
-  const { address: recipient, ensInput } = await resolveRecipient(ctx, input.to);
+  const { address: recipient, ensInput } = await resolveRecipient(ctx, chainId, input.to);
   const groups = await buildGroups(ctx, chainId, items);
   assertRecipient(ctx, chainId, recipient, groups.map(group => group.contract), nativeWei + wrappedWei > 0n);
 
@@ -355,32 +393,28 @@ export async function previewTransfer(ctx: Ctx, input: TransferInput): Promise<{
   const names = new Map(await Promise.all(groups.map(async group => [group.contract, await ctx.api.collection(chainId, group.contract).then(info => info.name || null, () => null)] as const)));
   const nftCount = groups.reduce((sum, group) => sum + group.items.length, 0);
   const sendCap = ctx.config.dailyMaxSendWei[chainId];
-  const lines = [
-    `PREVIEW: SEND from ${plan.wallet} on ${CHAIN_NAME[chainId]}. This leaves the wallet and cannot be undone.`,
-    ...recipientLines(plan, ensInput, facts),
-  ];
-  if (nftCount > 0) {
-    lines.push(`NFTs (${nftCount}):`);
-    for (const group of groups) {
-      const name = names.get(group.contract) ?? 'name unknown';
-      for (const item of group.items) lines.push(`- ${name} ${itemLabel(group.contract, item.tokenId, item.amount, group.standard)} (${group.standard === 'erc721' ? 'ERC-721' : 'ERC-1155'})`);
-    }
+  const rows: string[] = [];
+  for (const group of groups) {
+    const name = names.get(group.contract) ?? 'name unknown';
+    for (const item of group.items) rows.push(`${name} #${item.tokenId}${group.standard === 'erc1155' ? ` x${item.amount}` : ''}  (${group.contract}, ${group.standard === 'erc721' ? 'ERC-721' : 'ERC-1155'})`);
   }
-  if (nativeWei + wrappedWei > 0n) {
-    lines.push('Funds:');
-    if (wrappedWei > 0n) lines.push(`- ${wrapped(wrappedWei, chainId)} (wallet has ${wrapped(wrappedBalance, chainId)})`);
-    if (nativeWei > 0n) lines.push(`- ${native(nativeWei, chainId)} (wallet has ${native(nativeBalance, chainId)})`);
-    lines.push(`Sent today on ${CHAIN_NAME[chainId]}: ${native(ctx.state.sentToday(chainId), chainId)} of ${sendCap === null ? 'no limit set' : native(sendCap, chainId)} (OSWIKI_DAILY_MAX_SEND_${NATIVE_SYMBOL[chainId]}).`);
-  }
+  if (wrappedWei > 0n) rows.push(`${wrapped(wrappedWei, chainId)}  (wallet has ${wrapped(wrappedBalance, chainId)})`);
+  if (nativeWei > 0n) rows.push(`${native(nativeWei, chainId)}  (wallet has ${native(nativeBalance, chainId)})`);
+  const warnings = recipientWarnings(plan, ensInput, facts);
   if (nativeWei > 0n && fee.maxWei > 0n && nativeBalance - nativeWei < fee.maxWei) {
-    lines.push(`WARNING: after sending ${native(nativeWei, chainId)} the wallet may not have enough ${NATIVE_SYMBOL[chainId]} left for the network fee; the send could fail.`);
+    warnings.push(`⚠ After sending ${native(nativeWei, chainId)} the wallet may not have enough ${NATIVE_SYMBOL[chainId]} left for the network fee; the send could fail.`);
   }
-  lines.push(
-    `Transactions (${txs.length}, sent one after another): ${txs.map(planned => planned.label).join('; ')}.`,
-    fee.text,
-    'Ownership and a simulation of every transaction passed just now.',
-  );
-  return { text: lines.join('\n'), plan };
+  const details = [
+    `From ${plan.wallet}. ${nftCount > 0 ? `${nftCount} NFT${nftCount === 1 ? '' : 's'}. ` : ''}Transactions (${txs.length}, sent one after another): ${txs.map(planned => planned.label).join('; ')}.`,
+  ];
+  if (nativeWei + wrappedWei > 0n) details.push(`Sent today on ${CHAIN_NAME[chainId]}: ${native(ctx.state.sentToday(chainId), chainId)} of ${sendCap === null ? 'no limit set' : native(sendCap, chainId)} (OSWIKI_DAILY_MAX_SEND_${NATIVE_SYMBOL[chainId]}).`);
+  details.push('Ownership and a simulation of every transaction passed just now.');
+  const text = card(`APPROVE SEND · ${CHAIN_NAME[chainId]} · cannot be undone`, [
+    recipientRows(plan, ensInput, facts),
+    [...rows, ...warnings],
+    [...feeRow(fee, chainId), ...details],
+  ]);
+  return { text, plan };
 }
 
 export async function executeTransfer(ctx: Ctx, plan: TransferPlan, commit: () => void): Promise<string> {
@@ -398,11 +432,15 @@ export async function executeTransfer(ctx: Ctx, plan: TransferPlan, commit: () =
       const sent = await sendGuardedTx(ctx.chains, ctx.account, planned.tx, contracts, target);
       done.push(`- ${planned.label}: sent, transaction ${sent.hash} confirmed.`);
     } catch (err) {
+      const unconfirmed = err instanceof UnconfirmedTxError;
       const reason = sanitizeServerText((err as Error)?.message, 400) || 'unknown error';
+      let head = `Nothing was sent to ${plan.recipient}:`;
+      if (done.length > 0) head = `Partly sent to ${plan.recipient}:`;
+      else if (unconfirmed) head = `Sent to ${plan.recipient}, but NOT YET CONFIRMED:`;
       const lines = [
-        done.length > 0 ? `Partly sent to ${plan.recipient}:` : `Nothing was sent to ${plan.recipient}:`,
+        head,
         ...done,
-        `- ${planned.label}: FAILED (${reason})`,
+        unconfirmed ? `- ${planned.label}: ${(err as Error).message}` : `- ${planned.label}: FAILED (${reason})`,
         'The remaining transfers were not attempted. Tell the user exactly what was and was not sent; preview again for the rest if they want.',
       ];
       throw new SendStoppedError(lines.join('\n'));
@@ -442,11 +480,10 @@ export async function previewUnwrap(ctx: Ctx, input: { chainId: number; amount: 
   const plan: UnwrapPlan = { kind: 'unwrap', chainId, wallet: me(ctx), amountWei };
   return {
     plan,
-    text: [
-      `PREVIEW: unwrap ${wrapped(amountWei, chainId)} into ${native(amountWei, chainId)} in ${plan.wallet} on ${CHAIN_NAME[chainId]} (wallet has ${wrapped(balance, chainId)}). Nothing leaves the wallet.`,
-      fee.text,
-      `One transaction to the ${WRAPPED_SYMBOL[chainId]} contract ${WRAPPED_NATIVE[chainId]} (withdraw); the simulation passed just now.`,
-    ].join('\n'),
+    text: card(`APPROVE UNWRAP · ${CHAIN_NAME[chainId]} · nothing leaves the wallet`, [
+      [`${wrapped(amountWei, chainId)} -> ${native(amountWei, chainId)}  (wallet has ${wrapped(balance, chainId)})`, `In ${plan.wallet}`],
+      [...feeRow(fee, chainId), `One transaction to the ${WRAPPED_SYMBOL[chainId]} contract ${WRAPPED_NATIVE[chainId]} (withdraw); the simulation passed just now.`],
+    ]),
   };
 }
 

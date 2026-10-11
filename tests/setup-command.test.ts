@@ -56,12 +56,13 @@ interface Harness {
   keys: Hex[];
 }
 
-function harness(answers: string[], options: { secrets?: string[]; platform?: NodeJS.Platform; path?: string; isTTY?: boolean; color?: boolean; fetch?: FetchLike } = {}): Harness {
+function harness(answers: string[], options: { sendLimits?: string[]; secrets?: string[]; platform?: NodeJS.Platform; path?: string; isTTY?: boolean; color?: boolean; fetch?: FetchLike } = {}): Harness {
   const lines: string[] = [];
   const questions: string[] = [];
   const keys: Hex[] = [];
   const secrets = [...(options.secrets ?? [])];
   const queue = [...answers];
+  const sendQueue = [...(options.sendLimits ?? [])];
   const exec = vi.fn<Exec>(() => '');
   const deps: SetupDeps = {
     io: {
@@ -69,6 +70,7 @@ function harness(answers: string[], options: { secrets?: string[]; platform?: No
       ask: async (question) => {
         questions.push(question);
         lines.push(question);
+        if (question.startsWith('Daily send limit')) return sendQueue.shift() ?? '';
         const answer = queue.shift();
         if (answer === undefined) throw new Error(`unexpected question: ${question}`);
         return answer;
@@ -155,6 +157,21 @@ describe('setup: create wallet', () => {
     const out = h.output();
     expect(out).toContain('"OSWIKI_CONFIRM_MODE": "off"');
     expect(out).toContain('confirmation OFF - AI trades on its own within your limits');
+  });
+
+  it('leaves fund sending off unless a daily send limit is entered', async () => {
+    const off = harness(['', '', '', '', '', '', '', '', '', '4']);
+    expect(await runSetup([], off.deps)).toBe(0);
+    expect(off.output()).not.toContain('OSWIKI_DAILY_MAX_SEND');
+    expect(off.questions).toContain('Daily send limit, ETH + WETH (skip = off) [skip]: ');
+  });
+
+  it('writes a daily send limit when one is entered', async () => {
+    const on = harness(['', '', '', '', '', '', '', '', '', '4'], { sendLimits: ['lots', '0.2', ''] });
+    expect(await runSetup([], on.deps)).toBe(0);
+    expect(on.output()).toContain('"OSWIKI_DAILY_MAX_SEND_ETH": "0.2"');
+    expect(on.output()).not.toContain('OSWIKI_DAILY_MAX_SEND_APE');
+    expect(on.output()).toContain('Enter an amount like 0.05, or press Enter to skip.');
   });
 
   it('shows a new key only on explicit opt-in, once', async () => {

@@ -1,4 +1,4 @@
-import { API_BASE } from './constants.js';
+import { API_BASE, ZERO_ADDRESS } from './constants.js';
 import type { SeaportRequirements } from './seaport/listing.js';
 import type { AcceptOfferData, OfferRequirements } from './seaport/offer.js';
 import type { SeaportOrderParameters } from './seaport/order.js';
@@ -121,6 +121,12 @@ export interface CollectionInfo {
   currency: string | null;
   royalty: { bps: number; recipient: string } | null;
   verified?: boolean | null;
+}
+
+export interface EnsLookup {
+  address: string | null;
+  apechainAddress: string | null;
+  reverseName: string | null;
 }
 
 export interface VerifiedCollection {
@@ -313,6 +319,17 @@ export class ApiClient {
         : null,
       verified: typeof data.verified === 'boolean' ? data.verified : null,
     };
+  }
+
+  async ensResolve(name: string, chainId: number): Promise<EnsLookup> {
+    const data = asRecord(await this.request('GET', '/v1/ens/resolve', { name, chainId }));
+    const address = cleanAddress(data?.address);
+    const apechainAddress = cleanAddress(data?.apechainAddress);
+    if (!data || (data.address !== null && address === null) || (data.apechainAddress != null && apechainAddress === null)) {
+      throw new ApiError('OSWiki API /v1/ens/resolve returned an unreadable answer.', null, null);
+    }
+    const set = (value: string | null) => (value === ZERO_ADDRESS ? null : value);
+    return { address: set(address), apechainAddress: set(apechainAddress), reverseName: typeof data.reverseName === 'string' ? sanitizeServerText(data.reverseName, 100) || null : null };
   }
 
   /** Top verified collections of the chain by volume, cached per client; a failed load is not cached. */

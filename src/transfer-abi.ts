@@ -24,3 +24,7 @@ export const ENS_RESOLVER_ABI = [
   { name: 'addr', type: 'function', stateMutability: 'view', inputs: [{ name: 'node', type: 'bytes32' }], outputs: [{ name: '', type: 'address' }] },
   { name: 'name', type: 'function', stateMutability: 'view', inputs: [{ name: 'node', type: 'bytes32' }], outputs: [{ name: '', type: 'string' }] },
 ] as const;
+
+export const ENS_ADDR_COIN_ABI = [
+  { name: 'addr', type: 'function', stateMutability: 'view', inputs: [{ name: 'node', type: 'bytes32' }, { name: 'coinType', type: 'uint256' }], outputs: [{ name: '', type: 'bytes' }] },
+] as const;
