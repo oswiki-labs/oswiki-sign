@@ -185,9 +185,9 @@ describe('preview_buy + execute for OpenSea listings', () => {
     const askId = setupOpenSea(h, params);
     const preview = await h.call('preview_buy', { chainId: 1, askIds: [askId.toUpperCase().replace('0X', '0x')] });
     expect(preview.isError).toBe(false);
-    expect(preview.text).toContain('buy 1 OpenSea listing on Ethereum');
+    expect(preview.text).toContain('Buying 1 OpenSea listing for');
     expect(preview.text).toMatch(new RegExp(`- ${askId}: .* #2 for 1 ETH on OpenSea\\n`));
-    expect(preview.text).toContain('Total: 1 ETH');
+    expect(preview.text).toMatch(/\nTotal +1 ETH\n/);
     const request = h.api.requests.find(entry => entry.path.endsWith('/buy-data'))!;
     expect(request.body).toEqual({ chainId: 1, buyer: TEST_ADDRESS });
 
@@ -251,9 +251,10 @@ describe('preview_buy + execute for OpenSea listings', () => {
     const askId = setupOpenSea(h, params);
     const preview = await h.call('preview_buy', { chainId: 1, askIds: [oswikiAskId, askId] });
     expect(preview.isError).toBe(false);
-    expect(preview.text).toContain('buy 2 OSWiki + OpenSea listings');
+    expect(preview.text).toContain('APPROVE PURCHASE OF 2 ITEMS · Ethereum');
+    expect(preview.text).toContain('Buying 2 OSWiki + OpenSea listings');
     expect(preview.text).toMatch(new RegExp(`- ${oswikiAskId}: .* #1 for 1 ETH on OSWiki\\n`));
-    expect(preview.text).toContain('Total: 2 ETH');
+    expect(preview.text).toMatch(/\nTotal +2 ETH\n/);
     const result = await h.call('execute', { confirmId: confirmIdOf(preview.text) });
     expect(result.isError).toBe(false);
     const tx = h.chain.sent[0]!;

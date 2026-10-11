@@ -158,8 +158,9 @@ describe('human confirmation (H2)', () => {
     expect(result.isError).toBe(true);
     expect(result.text).toMatch(/did not approve/);
     expect(dialog.asked).toHaveLength(1);
-    expect(dialog.asked[0]).toContain('Total: 1 ETH');
-    expect(dialog.asked[0]).toContain(vectorAskId);
+    expect(dialog.asked[0]).toMatch(/\nTotal +1 ETH\n/);
+    expect(dialog.asked[0]).toContain(`order ${vectorAskId.slice(7, 13)}…${vectorAskId.slice(-4)}`);
+    expect(dialog.asked[0]).not.toContain('confirmId');
     expect(h.chain.sent).toHaveLength(0);
     expect((await h.call('execute', { confirmId: confirmIdOf(text) })).text).toMatch(/already used/);
   });

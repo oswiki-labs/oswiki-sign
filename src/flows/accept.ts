@@ -2,13 +2,15 @@ import type { Address } from 'viem';
 
 import { sendGuardedTx } from '../chain.js';
 import { getOswikiFeeRecipient, SEAPORT_ADDRESS, type SupportedChainId } from '../constants.js';
-import { addressLabel, wrapped } from '../format.js';
+import { wrapped } from '../format.js';
+import { Card, percentLabel, shortHex, type CardPreview } from '../format-card.js';
 import { findOfferFulfilledEvent, orderHashFromAskId, revertMessage } from '../seaport/fulfill.js';
-import { readConduitApproval, readOnchainRoyalty, readSeaportCounter, royaltySourceLabel, verifyRoyalty, type VerifiedRoyalty } from '../seaport/listing.js';
+import { readConduitApproval, readOnchainRoyalty, readSeaportCounter, royaltySourceLabel, UNVERIFIED_ROYALTY_LABEL, verifyRoyalty, type VerifiedRoyalty } from '../seaport/listing.js';
 import { assertOswikiSeaportOffer, encodeOfferAccept, type GuardedOfferAccept } from '../seaport/offer.js';
 import { SEAPORT_ITEM_TYPE, type OfferKind } from '../seaport/order.js';
 import { ADDRESS_RE, assertCollectionAllowed, assertHolds, chainOf, GuardError, me, ORDER_ID_RE, probeConduit, setApprovalData, TOKEN_ID_RE, type Ctx } from './common.js';
 import { applyMinFloor, fetchFloor } from './references.js';
+import { afterSends, txStep } from './tx-steps.js';
 
 export interface AcceptPlan {
   kind: 'accept';
@@ -56,7 +58,7 @@ async function loadAccept(ctx: Ctx, chainId: SupportedChainId, bidId: string, to
   return { guarded, maker, offerKind };
 }
 
-export async function previewAcceptOffer(ctx: Ctx, input: { chainId: number; bidId: string; tokenId: string; allowNoFloor?: boolean }): Promise<{ text: string; plan: AcceptPlan }> {
+export async function previewAcceptOffer(ctx: Ctx, input: { chainId: number; bidId: string; tokenId: string; allowNoFloor?: boolean }): Promise<CardPreview<AcceptPlan>> {
   const chainId = chainOf(input.chainId);
   if (typeof input.bidId !== 'string' || !ORDER_ID_RE.test(input.bidId)) throw new GuardError('bidId must look like "oswiki-0x...".');
   if (typeof input.tokenId !== 'string' || !TOKEN_ID_RE.test(input.tokenId)) throw new GuardError('tokenId must be a decimal token id.');
@@ -68,7 +70,7 @@ export async function previewAcceptOffer(ctx: Ctx, input: { chainId: number; bid
   const isErc1155 = guarded.bidOrder.consideration[0]!.itemType === SEAPORT_ITEM_TYPE.ERC1155;
   const item = { contract: guarded.contract, tokenId: input.tokenId, isErc1155, quantity: 1n };
   await assertHolds(client, me(ctx), item);
-  const [approved, probe, { floor }] = await Promise.all([
+  const [approved, probe, { info, floor }] = await Promise.all([
     readConduitApproval(client, guarded.contract, me(ctx)),
     probeConduit(client, me(ctx), item),
     fetchFloor(ctx, chainId, guarded.contract),
@@ -77,11 +79,9 @@ export async function previewAcceptOffer(ctx: Ctx, input: { chainId: number; bid
   const floorNote = applyMinFloor(floor, guarded.amounts.sellerNetWei, ctx.config.minListFloorPct, chainId, 'Your payout from this offer', input.allowNoFloor === true);
   const royalty = await checkAcceptRoyalty(ctx, chainId, guarded, input.tokenId);
 
-  let simulation = 'The fill is simulated right before sending, after the approval.';
   if (approved) {
     try {
       await client.call({ account: ctx.account.address, to: SEAPORT_ADDRESS, data: encodeOfferAccept(guarded), value: 0n });
-      simulation = 'The simulation passed just now.';
     } catch (err) {
       throw new GuardError(`Accepting would fail: ${revertMessage(err)}. Nothing was sent.`);
     }
@@ -101,16 +101,33 @@ export async function previewAcceptOffer(ctx: Ctx, input: { chainId: number; bid
     sellerNetWei: guarded.amounts.sellerNetWei,
     royaltyRecipient: royalty.recipient,
   };
-  const text = [
-    `PREVIEW: accept ${offerKind} offer ${input.bidId} from ${maker}: sell ${guarded.contract} #${input.tokenId} on ${chainId === 1 ? 'Ethereum' : 'ApeChain'}.`,
-    `- Offer ${wrapped(guarded.amounts.offerWei, chainId)}, fee ${wrapped(guarded.amounts.feeWei, chainId)}, royalty ${wrapped(guarded.amounts.royaltyWei, chainId)}: you receive ${wrapped(guarded.amounts.sellerNetWei, chainId)}.`,
-    royalty.recipient ? `- Royalty ${wrapped(royalty.wei, chainId)} to ${addressLabel(royalty.recipient)}, ${royaltySourceLabel(royalty.source)}.` : '- No royalty.',
-    approved ? '- No approval needed.' : `- First approves the OpenSea conduit on ${guarded.contract} (one transaction).`,
-    floor.warning ?? '',
-    floorNote ? `NOTE: ${floorNote}` : '',
-    `One transaction to Seaport ${SEAPORT_ADDRESS}. ${simulation}`,
-  ].filter(Boolean);
-  return { text: text.join('\n'), plan };
+  const name = info?.name || shortHex(guarded.contract);
+  const { offerWei, feeWei, royaltyWei, sellerNetWei } = guarded.amounts;
+  const card = new Card('sale', chainId, { irreversible: true })
+    .text(`Sell ${name} #${input.tokenId}`)
+    .text(`to ${shortHex(maker)} · ${offerKind === 'item' ? 'offer on this token' : 'collection offer'}`, 2)
+    .row('Offer', wrapped(offerWei, chainId))
+    .row(`OSWiki fee ${percentLabel(feeWei, offerWei)}`, `−${wrapped(feeWei, chainId)}`, 2);
+  if (royalty.recipient) {
+    card.row(`Royalty ${percentLabel(royalty.wei, offerWei)} → ${shortHex(royalty.recipient)}`, `−${wrapped(royaltyWei, chainId)}`, 2);
+    if (royalty.source === 'ERC-2981') card.text('✓ matches on-chain ERC-2981 royaltyInfo', 4);
+    else card.warn(`Royalty ${UNVERIFIED_ROYALTY_LABEL}.`, 2);
+  } else {
+    card.row('Royalty', 'none', 2);
+  }
+  card.row('You receive', wrapped(sellerNetWei, chainId));
+  if (floor.warning) card.warn(floor.warning, 2);
+  if (floorNote) card.warn(floorNote, 2);
+  card.rule()
+    .text(approved ? 'No approval needed.' : `First a one-time approval: let the OpenSea conduit move your ${name} (1 transaction, you pay gas).`)
+    .text(approved ? '✓ Simulated just now: it goes through.' : 'The sale is simulated right before sending, after the approval.')
+    .details([`Seaport ${shortHex(SEAPORT_ADDRESS)}`, `offer ${shortHex(input.bidId)}`, `collection ${shortHex(guarded.contract)}`]);
+  const note = [
+    `Accepting ${offerKind} offer ${input.bidId} from ${maker}: sell ${guarded.contract} #${input.tokenId}.`,
+    royalty.recipient ? `Royalty ${wrapped(royalty.wei, chainId)} to ${royalty.recipient}, ${royaltySourceLabel(royalty.source)}.` : 'No royalty.',
+    `One transaction to Seaport ${SEAPORT_ADDRESS}.`,
+  ];
+  return { text: card.render(), plan, note };
 }
 
 export async function executeAcceptOffer(ctx: Ctx, plan: AcceptPlan, commit: () => void): Promise<string> {
@@ -129,15 +146,19 @@ export async function executeAcceptOffer(ctx: Ctx, plan: AcceptPlan, commit: () 
   const log: string[] = [];
 
   commit();
-  if (!approved) {
-    const sent = await sendGuardedTx(ctx.chains, ctx.account, { chainId, to: guarded.contract, data: setApprovalData(), value: 0n }, nftContracts);
-    log.push(`Approved the OpenSea conduit on ${guarded.contract} (tx ${sent.hash}).`);
-    if (await probeConduit(client, me(ctx), item) === 'blocked') throw new GuardError('This collection blocks transfers through the OpenSea conduit; the offer was not accepted.');
+  try {
+    if (!approved) {
+      const approval = await txStep(log, `Approve the OpenSea conduit on ${guarded.contract}`, () => sendGuardedTx(ctx.chains, ctx.account, { chainId, to: guarded.contract, data: setApprovalData(), value: 0n }, nftContracts));
+      log.push(`Approved the OpenSea conduit on ${guarded.contract} (tx ${approval.hash}).`);
+      if (await probeConduit(client, me(ctx), item) === 'blocked') throw new GuardError('This collection blocks transfers through the OpenSea conduit; the offer was not accepted.');
+    }
+    const sent = await txStep(log, 'Accept the offer', () => sendGuardedTx(ctx.chains, ctx.account, { chainId, to: SEAPORT_ADDRESS, data: encodeOfferAccept(guarded), value: 0n }, nftContracts));
+    const filled = findOfferFulfilledEvent(sent.logs, orderHashFromAskId(plan.bidId)!, { token: guarded.contract, identifier: BigInt(plan.tokenId) });
+    log.push(filled
+      ? `Sold ${guarded.contract} #${plan.tokenId} for ${wrapped(plan.sellerNetWei, chainId)} net (tx ${sent.hash}).`
+      : `Transaction ${sent.hash} confirmed but did not fill this offer.`);
+  } catch (err) {
+    throw afterSends(log, err);
   }
-  const sent = await sendGuardedTx(ctx.chains, ctx.account, { chainId, to: SEAPORT_ADDRESS, data: encodeOfferAccept(guarded), value: 0n }, nftContracts);
-  const filled = findOfferFulfilledEvent(sent.logs, orderHashFromAskId(plan.bidId)!, { token: guarded.contract, identifier: BigInt(plan.tokenId) });
-  log.push(filled
-    ? `Sold ${guarded.contract} #${plan.tokenId} for ${wrapped(plan.sellerNetWei, chainId)} net (tx ${sent.hash}).`
-    : `Transaction ${sent.hash} confirmed but did not fill this offer.`);
   return log.join('\n');
 }

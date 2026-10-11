@@ -13,6 +13,7 @@ import { MAX_UNVERIFIED_ROYALTY_BPS, UNVERIFIED_ROYALTY_LABEL, verifyListingRoya
 import { OPENSEA_SIGNED_ZONE } from '../src/seaport/opensea.js';
 import { buildListingOrder, pickOrderComponents, serializeOrderComponents } from '../src/seaport/order.js';
 import { hashOrderComponents } from '../src/seaport/sign.js';
+import { shortHex } from '../src/format-card.js';
 import { errorText } from '../src/server.js';
 import vectors from './fixtures/seaport-vectors.json' with { type: 'json' };
 import {
@@ -21,6 +22,7 @@ import {
   confirmIdOf,
   ETH,
   fulfilledLog,
+  flat,
   harness,
   listingRequirements,
   MAINNET_FEE_RECIPIENT,
@@ -123,10 +125,11 @@ describe('N3/M2: royalty only from the API', () => {
     setupListing(h);
     h.chain.approvals.add(COLLECTION);
     const preview = await h.call('preview_listing', listArgs('1'));
-    expect(preview.text).toContain(`royalty 0.05 ETH to 0x0000...dead (${ROYALTY_RECIPIENT}), ${UNVERIFIED_ROYALTY_LABEL}`);
+    expect(flat(preview.text)).toContain(`⚠ Royalty ${UNVERIFIED_ROYALTY_LABEL}.`);
+    expect(preview.text).toContain(`royalty 0.05 ETH to ${ROYALTY_RECIPIENT}, ${UNVERIFIED_ROYALTY_LABEL}`);
     expect(preview.text).not.toMatch(/checked against the collection's royalty settings/);
     await h.call('execute', { confirmId: confirmIdOf(preview.text) });
-    expect(asked[0]).toContain(UNVERIFIED_ROYALTY_LABEL);
+    expect(flat(asked[0]!)).toContain(UNVERIFIED_ROYALTY_LABEL);
   });
 
   it('refuses an API-only royalty above 10% and explains why, but accepts it with ERC-2981 proof', async () => {
@@ -134,7 +137,7 @@ describe('N3/M2: royalty only from the API', () => {
     setupListing(h, { royaltyBps: 1500n, hostedBps: 1500 });
     await expect(previewListing(h.ctx, listArgs('1'))).rejects.toThrow(/15% comes only from the OSWiki API .* more than 10% royalty without on-chain proof/);
     withOnchainRoyalty(h, { recipient: ROYALTY_RECIPIENT, bps: 1500 });
-    expect((await previewListing(h.ctx, listArgs('1'))).text).toContain('checked against the collection\'s on-chain ERC-2981 royaltyInfo');
+    expect((await previewListing(h.ctx, listArgs('1'))).text).toContain('✓ matches on-chain ERC-2981 royaltyInfo');
   });
 
   it('caps at exactly 10%', () => {
@@ -149,11 +152,11 @@ describe('N3/M2: royalty only from the API', () => {
     const terms = { chain: 'ethereum', protocolAddress: SEAPORT_ADDRESS, conduitKey: OPENSEA_CONDUIT_KEY, zone: OPENSEA_SIGNED_ZONE, orderType: 3, feeRecipient: OPENSEA_FEE_RECIPIENT, feeBps: 100 };
     setupListing(h, { opensea: { ...terms, creatorFees: [{ recipient: ROYALTY_RECIPIENT, bps: 500 }] } });
     const { text } = await previewListing(h.ctx, listArgs('1', { crossListOpenSea: true }));
-    expect(text).toMatch(new RegExp(`creator fee [0-9.]+ ETH to 0x0000\\.\\.\\.dead \\(${ROYALTY_RECIPIENT}\\), UNVERIFIED \\(from OSWiki API`));
+    expect(text).toMatch(/\n {4}Creator fee 5% → 0x0000…dead +−[0-9.]+ ETH\n {4}⚠ Creator fee UNVERIFIED \(from OSWiki/);
 
     const bad = harness();
     setupListing(bad, { opensea: { ...terms, creatorFees: [{ recipient: BEEF, bps: 500 }] } });
-    expect((await previewListing(bad.ctx, listArgs('1', { crossListOpenSea: true }))).text).toMatch(/NOT cross-listed on OpenSea \(OpenSea asks for a creator fee to 0x0+beef/);
+    expect(flat((await previewListing(bad.ctx, listArgs('1', { crossListOpenSea: true }))).text)).toMatch(/NOT cross-listed on OpenSea \(OpenSea asks for a creator fee to 0x0+beef/);
   });
 });
 
@@ -177,7 +180,9 @@ describe('N10: accept-offer royalty leg', () => {
     const h = harness({ logsFor: () => [fulfilledLog(vector.orderHash as Hex, OTHER_SELLER, { token: COLLECTION, identifier: 1n })] });
     setupAccept(h);
     const preview = await h.call('preview_accept_offer', { chainId: 1, bidId, tokenId: '1' });
-    expect(preview.text).toContain(`- Royalty 0.05 WETH to 0x0000...dead (${ROYALTY_RECIPIENT}), ${UNVERIFIED_ROYALTY_LABEL}.`);
+    expect(preview.text).toMatch(/\n {2}Royalty 5% → 0x0000…dead +−0\.05 WETH\n/);
+    expect(flat(preview.text)).toContain(`⚠ Royalty ${UNVERIFIED_ROYALTY_LABEL}.`);
+    expect(preview.text).toContain(`Royalty 0.05 WETH to ${ROYALTY_RECIPIENT}, ${UNVERIFIED_ROYALTY_LABEL}.`);
     expect((await h.call('execute', { confirmId: confirmIdOf(preview.text) })).text).toContain('Sold');
   });
 
@@ -220,7 +225,7 @@ describe('N8: auto-cancels only the same token', () => {
     h.api.routes.set(`GET /v1/orders/asks/oswiki-${hash}/components`, () => ({ parameters: serializeOrderComponents(other) }));
     const { text, plan } = await previewListing(h.ctx, listArgs('2'));
     expect(plan.cancels).toEqual([]);
-    expect(text).toContain(`Your listing oswiki-${hash} is not for ${COLLECTION} #7 on-chain, so it is NOT cancelled.`);
+    expect(flat(text)).toContain(`⚠ Your listing ${shortHex(hash)} is not for Otherdeed Expanded #7 on-chain, so it is NOT cancelled.`);
   });
 
   it('drops a linked OpenSea order for another token and names each cancel with collection, id and price', async () => {
@@ -233,7 +238,7 @@ describe('N8: auto-cancels only the same token', () => {
     h.api.routes.set(`GET /v1/orders/asks/oswiki-${hash}/components`, () => ({ parameters: serializeOrderComponents(own), opensea: { orderHash: hashOrderComponents(twin), parameters: serializeOrderComponents(twin), status: 'posted' } }));
     const { text, plan } = await previewListing(h.ctx, listArgs('2'));
     expect(plan.cancels.map(target => target.id)).toEqual([`oswiki-${hash}`]);
-    expect(text).toContain(`- cancel your listing of Otherdeed Expanded #7 at 0.5 ETH (oswiki-${hash})`);
+    expect(text).toMatch(/\n {2}- your listing of Otherdeed +0\.5 ETH\n {4}Expanded #7\n/);
     expect(text).not.toContain('linked OpenSea listing');
   });
 });
@@ -259,14 +264,14 @@ describe('N7: buy preview collection context', () => {
     const { text, isError } = await h.call('preview_buy', { chainId: 1, askIds: [askId] });
     expect(isError).toBe(false);
     expect(text).toContain(`- ${askId}: Otherdeed Expanded ${COLLECTION} #1 for 1 ETH`);
-    expect(text).toContain(`- Collection Otherdeed Expanded (${COLLECTION}): verified on OSWiki, floor 0.5 ETH.`);
-    expect(text).not.toContain('WARNING');
+    expect(text).toMatch(/\nOtherdeed Expanded #1 +1 ETH\n {2}OSWiki · ✓ verified · floor 0\.5 ETH\n/);
+    expect(text).not.toContain('⚠');
   });
 
   it('warns above 3x the floor', async () => {
     const h = harness();
     setupBuy(h, { name: 'Otherdeed Expanded', verified: true, stats: { floorPrice: 0.3 } });
-    expect((await h.call('preview_buy', { chainId: 1, askIds: [askId] })).text).toContain('WARNING: this costs more than 3x the collection floor (0.3 ETH)');
+    expect(flat((await h.call('preview_buy', { chainId: 1, askIds: [askId] })).text)).toContain('⚠ This costs more than 3x the collection floor (0.3 ETH).');
   });
 
   it('warns for an unverified lookalike of a verified collection at another address', async () => {
@@ -275,8 +280,8 @@ describe('N7: buy preview collection context', () => {
     setupBuy(h, { name: `Other${char(0x0434)}eed Expandd`, verified: false, stats: { floorPrice: 0.5 } }, [{ address: real, name: 'Otherdeed Expanded', verified: true }]);
     const { text } = await h.call('preview_buy', { chainId: 1, askIds: [askId] });
     expect(text).toContain('NOT verified');
-    expect(text).toContain('is not a verified collection. Confirm the contract address');
-    expect(text).toContain(`looks like the verified collection "Otherdeed Expanded" (${real}), but this is a different contract (${COLLECTION})`);
+    expect(flat(text)).toContain('is not a verified collection. Make sure this is the contract you mean');
+    expect(flat(text)).toContain(`looks like the verified collection "Otherdeed Expanded" (${real}), but this is a different contract (${COLLECTION})`);
   });
 
   it('warns when the profile cannot be loaded but still previews', async () => {
@@ -284,7 +289,7 @@ describe('N7: buy preview collection context', () => {
     setupBuy(h, null);
     const { text, isError } = await h.call('preview_buy', { chainId: 1, askIds: [askId] });
     expect(isError).toBe(false);
-    expect(text).toContain('collection profile could not be loaded');
+    expect(flat(text)).toContain('collection profile could not be loaded');
   });
 
   it('caches the verified list per chain', async () => {

@@ -12,6 +12,7 @@ import {
   confirmIdOf,
   ETH,
   fulfilledLog,
+  flat,
   harness,
   listingRequirements,
   MAINNET_FEE_RECIPIENT,
@@ -51,7 +52,8 @@ describe('preview_listing + execute', () => {
     const preview = await h.call('preview_listing', listArgs('1.5'));
     expect(preview.isError).toBe(false);
     expect(preview.text).toContain('1.5 ETH');
-    expect(preview.text).toContain('you receive');
+    expect(preview.text).toMatch(/\n {2}You receive +1\.41 ETH\n/);
+    expect(flat(preview.text)).toContain('One-time approval: let the OpenSea conduit move your Otherdeed Expanded');
     expect(preview.text).toContain('setApprovalForAll');
     expect(preview.text).toMatch(/Ask the user to confirm, then call execute with confirmId [0-9a-f-]{36}\.$/);
 
@@ -130,8 +132,9 @@ describe('preview_listing + execute', () => {
     h.api.routes.set(`GET /v1/orders/asks/oswiki-${cheapHash}/components`, () => ({ orderHash: cheapHash, parameters: serializeOrderComponents(cheap) }));
 
     const preview = await h.call('preview_listing', listArgs('2'));
-    expect(preview.text).toContain('First cancels 1 cheaper existing listing(s) of yours on-chain');
-    expect(preview.text).toContain(`- cancel your listing of Otherdeed Expanded #7 at 0.5 ETH (oswiki-${cheapHash})`);
+    expect(flat(preview.text)).toContain('First cancels 1 cheaper listing of yours on-chain');
+    expect(preview.text).toMatch(/\n {2}- your listing of Otherdeed +0\.5 ETH\n {4}Expanded #7\n/);
+    expect(preview.text).toContain(`Cancels first: oswiki-${cheapHash}.`);
     const result = await h.call('execute', { confirmId: confirmIdOf(preview.text) });
     expect(result.isError).toBe(false);
     expect(h.chain.sent).toHaveLength(1);
@@ -211,8 +214,8 @@ describe('explicit prices and the floor', () => {
     const h = harness();
     setupListing(h, { floor: null, sales: [], tokens: [{ tokenId: '7', contract: { address: COLLECTION }, lastSale: null, attributes: [] }] });
     const result = await h.call('preview_listing', listArgs('2', { allowNoFloor: true }));
-    expect(result.text).toContain('no floor (no active listings)');
-    expect(result.text).toContain('no previous sale');
+    expect(flat(result.text)).toContain('no floor (no active listings)');
+    expect(flat(result.text)).toContain('no previous sale');
     expect(result.text).not.toMatch(/WARNING/);
   });
 });
@@ -225,8 +228,8 @@ describe('price references', () => {
     const h = harness();
     setupListing(h, { tokens: tokens({ price: 2.1, currency: 'ETH', timestamp: daysAgo(12) }) });
     const result = await h.call('preview_listing', listArgs('1'));
-    expect(result.text).toContain('last sale 2.1 ETH (12d ago)');
-    expect(result.text).toMatch(/WARNING: the price is under 70% of the lowest recent sale reference \(2\.1 ETH\)/);
+    expect(flat(result.text)).toContain('last sale 2.1 ETH (12d ago)');
+    expect(flat(result.text)).toMatch(/⚠ The price is under 70% of the lowest recent sale reference \(2\.1 ETH\)/);
     expect(result.isError).toBe(false);
   });
 
@@ -234,7 +237,7 @@ describe('price references', () => {
     const h = harness();
     setupListing(h, { tokens: tokens({ price: 2.1, currency: 'ETH', timestamp: daysAgo(120) }) });
     const result = await h.call('preview_listing', listArgs('1'));
-    expect(result.text).toContain('last sale 2.1 ETH (120d ago)');
+    expect(flat(result.text)).toContain('last sale 2.1 ETH (120d ago)');
     expect(result.text).not.toMatch(/WARNING/);
   });
 
@@ -253,8 +256,8 @@ describe('price references', () => {
     expect(salesCall.query['traits[Environment]']).toBe('Chaos');
     expect(salesCall.query['traits[Sediment]']).toBe('Cosmic Dream');
     expect(salesCall.query.collection).toBe(COLLECTION);
-    expect(low.text).toContain('recent "Chaos / Cosmic Dream" sales 1.8-2.4 ETH (2, newest 3d ago)');
-    expect(low.text).toMatch(/WARNING: .* \(1\.8 ETH\)/);
+    expect(flat(low.text)).toContain('recent "Chaos / Cosmic Dream" sales 1.8-2.4 ETH (2, newest 3d ago)');
+    expect(flat(low.text)).toMatch(/⚠ .* \(1\.8 ETH\)/);
     const fine = await h.call('preview_listing', listArgs('1.3'));
     expect(fine.text).not.toMatch(/WARNING/);
   });
@@ -275,7 +278,7 @@ describe('price references', () => {
     const h = harness();
     setupListing(h, { tokens: [{ tokenId: '7', contract: { address: '0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258' }, lastSale: { price: 9, currency: 'ETH', timestamp: daysAgo(1) }, attributes: chaos }] });
     const result = await h.call('preview_listing', listArgs('1'));
-    expect(result.text).toContain('last sale unavailable');
+    expect(flat(result.text)).toContain('last sale unavailable');
     expect(result.text).not.toMatch(/WARNING/);
   });
 
@@ -283,11 +286,11 @@ describe('price references', () => {
     const h = harness();
     setupListing(h, { tokens: tokens(null) });
     h.api.routes.delete('GET /v1/sales');
-    expect((await h.call('preview_listing', listArgs('1'))).text).toContain('"Chaos / Cosmic Dream" sales unavailable');
+    expect((await h.call('preview_listing', listArgs('1'))).text.replace(/\s+/g, ' ')).toContain('"Chaos / Cosmic Dream" sales unavailable');
     h.api.routes.delete(`GET /v1/collections/${COLLECTION}/tokens`);
     const result = await h.call('preview_listing', listArgs('1'));
     expect(result.isError).toBe(false);
-    expect(result.text).toContain('last sale unavailable');
+    expect(flat(result.text)).toContain('last sale unavailable');
   });
 
   it('batches token references per collection and trait sales per distinct trait set', async () => {
@@ -428,7 +431,7 @@ describe('preview_buy + execute', () => {
     setupBuy(h);
     const preview = await h.call('preview_buy', { chainId: 1, askIds: [vectorAskId] });
     expect(preview.isError).toBe(false);
-    expect(preview.text).toContain('Total: 1 ETH');
+    expect(preview.text).toMatch(/\nTotal +1 ETH\n/);
     const result = await h.call('execute', { confirmId: confirmIdOf(preview.text) });
     expect(result.isError).toBe(false);
     expect(result.text).toContain('bought');
@@ -532,8 +535,8 @@ describe('preview_offer + execute', () => {
     h.chain.wrappedBalance = ETH / 2n;
     const preview = await h.call('preview_offer', { chainId: 1, contract: COLLECTION, price: '0.4', quantity: 3 });
     expect(preview.isError).toBe(false);
-    expect(preview.text).toContain('Wrap 0.7 ETH');
-    expect(preview.text).toContain('Approve exactly 1.2 WETH');
+    expect(preview.text).toMatch(/\nFirst wrap \(1 transaction\) +0\.7 ETH → WETH\n/);
+    expect(preview.text).toContain('Approves exactly 1.2 WETH to Seaport');
     const result = await h.call('execute', { confirmId: confirmIdOf(preview.text) });
     expect(result.isError).toBe(false);
     const [wrap, approve] = h.chain.sent;
@@ -579,7 +582,7 @@ describe('preview_accept_offer + execute', () => {
     }));
     const preview = await h.call('preview_accept_offer', { chainId: 1, bidId, tokenId: '1' });
     expect(preview.isError).toBe(false);
-    expect(preview.text).toContain('you receive 0.94 WETH');
+    expect(preview.text).toMatch(/\nYou receive +0\.94 WETH\n/);
     const result = await h.call('execute', { confirmId: confirmIdOf(preview.text) });
     expect(result.text).toContain('Sold');
     expect(h.chain.sent[0]!.data).toBe(vector.sentCalldata);

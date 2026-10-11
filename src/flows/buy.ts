@@ -5,12 +5,14 @@ import { networkFee, sendGuardedTx } from '../chain.js';
 import { NATIVE_SYMBOL, SEAPORT_ADDRESS, type SupportedChainId } from '../constants.js';
 import { ApiError } from '../api.js';
 import { native } from '../format.js';
+import { Card, feeValue, feeWarnings, shortHex, type CardPreview } from '../format-card.js';
 import { assertOswikiSeaportOrder, fulfilledOrderHashes, orderHashFromAskId, OswikiOrderGuardError, revertMessage } from '../seaport/fulfill.js';
 import { readSeaportCounter } from '../seaport/listing.js';
 import { assertOpenSeaSeaportOrder } from '../seaport/opensea-buy.js';
 import { hashOrderComponents } from '../seaport/sign.js';
 import { checkBuyCollection, PRICE_OVER_FLOOR_FACTOR, type CollectionCheck } from './collection-check.js';
 import { assertBuyingEnabled, assertCollectionAllowed, assertMaxBuy, chainOf, GuardError, me, type Ctx } from './common.js';
+import { txStep } from './tx-steps.js';
 
 export const MAX_BUY_ITEMS = 20;
 export const BUY_ASK_ID_RE = /^(?:oswiki-)?0x[0-9a-fA-F]{64}$/;
@@ -109,7 +111,7 @@ async function simulateBuy(ctx: Ctx, chainId: SupportedChainId, loaded: LoadedOr
   }
 }
 
-export async function previewBuy(ctx: Ctx, input: { chainId: number; askIds: string[] }): Promise<{ text: string; plan: BuyPlan }> {
+export async function previewBuy(ctx: Ctx, input: { chainId: number; askIds: string[] }): Promise<CardPreview<BuyPlan>> {
   const chainId = chainOf(input.chainId);
   assertBuyingEnabled(ctx.config, chainId);
   const raw = input.askIds ?? [];
@@ -147,22 +149,34 @@ export async function previewBuy(ctx: Ctx, input: { chainId: number; askIds: str
     totalValue: total,
   };
   const markets = (['oswiki', 'opensea'] as const).filter(market => loaded.some(entry => entry.marketplace === market)).map(market => MARKETPLACE_NAME[market]).join(' + ');
-  const text = [
-    `PREVIEW: buy ${loaded.length} ${markets} listing${loaded.length === 1 ? '' : 's'} on ${chainId === 1 ? 'Ethereum' : 'ApeChain'} for ${me(ctx)}.`,
-    ...loaded.flatMap((entry) => {
-      const check = checkOf.get(entry.contract)!;
-      const line = `- ${entry.askId}: ${check.name} ${entry.contract} #${entry.tokenId}${entry.quantity > 1n ? ` x${entry.quantity}` : ''} for ${native(entry.value, chainId)} on ${MARKETPLACE_NAME[entry.marketplace]}`;
-      const unitWei = entry.value / (entry.quantity > 0n ? entry.quantity : 1n);
-      return check.floorWei !== null && unitWei > check.floorWei * PRICE_OVER_FLOOR_FACTOR
-        ? [line, `  WARNING: this costs more than ${PRICE_OVER_FLOOR_FACTOR}x the collection floor (${native(check.floorWei, chainId)}). Double-check it with the user.`]
-        : [line];
-    }),
-    ...checks.flatMap(check => check.lines),
-    `Total: ${native(total, chainId)} (wallet balance ${native(balance, chainId)}).`,
-    fee.text,
-    `One transaction to Seaport ${SEAPORT_ADDRESS}; the simulation passed just now.`,
+  const card = new Card(loaded.length === 1 ? 'purchase' : `purchase of ${loaded.length} items`, chainId, { irreversible: true });
+  const shown = new Set<string>();
+  for (const entry of loaded) {
+    const check = checkOf.get(entry.contract)!;
+    const label = check.name === entry.contract ? shortHex(entry.contract) : check.name;
+    card.row(`${label} #${entry.tokenId}${entry.quantity > 1n ? ` ×${entry.quantity}` : ''}`, native(entry.value, chainId));
+    card.text(`${MARKETPLACE_NAME[entry.marketplace]} · ${check.badge} · floor ${check.floorWei === null ? 'none' : native(check.floorWei, chainId)}`, 2);
+    const unitWei = entry.value / (entry.quantity > 0n ? entry.quantity : 1n);
+    if (check.floorWei !== null && unitWei > check.floorWei * PRICE_OVER_FLOOR_FACTOR) card.warn(`This costs more than ${PRICE_OVER_FLOOR_FACTOR}x the collection floor (${native(check.floorWei, chainId)}).`, 2);
+    if (!shown.has(entry.contract)) {
+      shown.add(entry.contract);
+      for (const warning of check.warnings) card.warn(warning, 2);
+    }
+  }
+  const after = balance - total - (fee.nowWei ?? fee.maxWei);
+  card.rule()
+    .row('Total', native(total, chainId))
+    .row('Network fee', feeValue(fee, chainId))
+    .row('Wallet after', `~${native(after > 0n ? after : 0n, chainId)}`);
+  for (const warning of feeWarnings(fee)) card.warn(warning);
+  card.text('✓ Simulated just now: it goes through.')
+    .details([`Seaport ${shortHex(SEAPORT_ADDRESS)}`, loaded.length === 1 ? `order ${shortHex(loaded[0]!.orderHash)}` : `${loaded.length} orders`]);
+  const note = [
+    `Buying ${loaded.length} ${markets} listing${loaded.length === 1 ? '' : 's'} for ${me(ctx)} (wallet balance ${native(balance, chainId)}). ${fee.text}`,
+    ...loaded.map(entry => `- ${entry.askId}: ${checkOf.get(entry.contract)!.name} ${entry.contract} #${entry.tokenId}${entry.quantity > 1n ? ` x${entry.quantity}` : ''} for ${native(entry.value, chainId)} on ${MARKETPLACE_NAME[entry.marketplace]}`),
+    `One transaction to Seaport ${SEAPORT_ADDRESS}.`,
   ];
-  return { text: text.join('\n'), plan };
+  return { text: card.render(), plan, note };
 }
 
 export async function executeBuy(ctx: Ctx, plan: BuyPlan, commit: () => void): Promise<string> {
@@ -182,7 +196,7 @@ export async function executeBuy(ctx: Ctx, plan: BuyPlan, commit: () => void): P
   await simulateBuy(ctx, chainId, loaded, total);
 
   commit();
-  const sent = await sendGuardedTx(ctx.chains, ctx.account, { chainId, to: SEAPORT_ADDRESS, data: encodeBuy(loaded.map(entry => entry.order), me(ctx)), value: total }, new Set());
+  const sent = await txStep([], `Buy for ${native(total, chainId)}`, () => sendGuardedTx(ctx.chains, ctx.account, { chainId, to: SEAPORT_ADDRESS, data: encodeBuy(loaded.map(entry => entry.order), me(ctx)), value: total }, new Set()));
   const filled = fulfilledOrderHashes(sent.logs);
   const lines = [`Transaction ${sent.hash} confirmed.`];
   for (const entry of loaded) lines.push(`- ${entry.askId}: ${filled.has(entry.orderHash) ? 'bought' : 'NOT filled (refunded by Seaport)'}`);

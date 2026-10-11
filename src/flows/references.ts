@@ -29,12 +29,12 @@ export function resolveFloor(info: CollectionInfo | null, cheapestListing: numbe
   if (apiWei !== null && listingWei !== null) {
     const [low, high] = apiWei < listingWei ? [apiWei, listingWei] : [listingWei, apiWei];
     if (high > low * FLOOR_DISAGREE_FACTOR) {
-      return { wei: high, unavailable: false, warning: `WARNING: the API floor (${native(apiWei, chainId)}) and the cheapest active listing on any marketplace (${native(listingWei, chainId)}) differ by more than ${FLOOR_DISAGREE_FACTOR}x; the floor check uses the higher, ${native(high, chainId)}.` };
+      return { wei: high, unavailable: false, warning: `The API floor (${native(apiWei, chainId)}) and the cheapest active listing on any marketplace (${native(listingWei, chainId)}) differ by more than ${FLOOR_DISAGREE_FACTOR}x; the floor check uses the higher, ${native(high, chainId)}.` };
     }
     return { wei: apiWei, unavailable: false, warning: null };
   }
   if (apiWei === null && listingWei !== null) {
-    return { wei: listingWei, unavailable: info === null, warning: `WARNING: the API reports no floor, but there is an active listing at ${native(listingWei, chainId)}; the floor check uses it.` };
+    return { wei: listingWei, unavailable: info === null, warning: `The API reports no floor, but there is an active listing at ${native(listingWei, chainId)}; the floor check uses it.` };
   }
   return { wei: apiWei, unavailable: info === null, warning: null };
 }
@@ -160,7 +160,7 @@ export function checkListingPrice(refs: CollectionReferences, input: { chainId: 
   if (referenceWei.length > 0) {
     const lowest = referenceWei.reduce((min, wei) => (wei < min ? wei : min));
     if (unitPriceWei * 100n < lowest * BigInt(WARN_BELOW_PCT)) {
-      warnings.push(`WARNING: the price is under ${WARN_BELOW_PCT}% of the lowest recent sale reference (${native(lowest, chainId)}). Double-check it with the user.`);
+      warnings.push(`The price is under ${WARN_BELOW_PCT}% of the lowest recent sale reference (${native(lowest, chainId)}).`);
     }
   }
   return { references: parts.join(' · '), warnings };
@@ -182,7 +182,7 @@ export function applyMinFloor(floorRef: FloorReference, unitPriceWei: bigint, pc
     if (allowNoFloor !== true) {
       throw new FloorGuardError(`No floor reference for this collection (${why}), so the ${pct}% minimum-floor check (OSWIKI_MIN_LIST_FLOOR_PCT) cannot run. Nothing was signed or sent. Tell the user there is no floor, confirm ${native(unitPriceWei, chainId)} with them, and only if they explicitly accept it without a floor check run the preview again with allowNoFloor: true.`);
     }
-    return `No floor reference for this collection (${why}): the ${pct}% minimum-floor check was skipped because allowNoFloor was set; the price is exactly the explicit number given.`;
+    return `No floor reference for this collection (${why}): the ${pct}% minimum-floor check was skipped because you allowed it; the price is exactly the number you gave.`;
   }
   const minimum = (floor * BigInt(pct)) / 100n;
   if (unitPriceWei < minimum) {

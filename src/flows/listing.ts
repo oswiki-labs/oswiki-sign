@@ -2,8 +2,9 @@ import type { Address } from 'viem';
 
 import { ApiError } from '../api.js';
 import { sendGuardedTx } from '../chain.js';
-import { getOswikiFeeRecipient, OPENSEA_CONDUIT_KEY, SEAPORT_ADDRESS, ZERO_ADDRESS, type SupportedChainId } from '../constants.js';
-import { addressLabel, CONFIRM_FOOTER, native, parsePositiveAmount } from '../format.js';
+import { getOswikiFeeRecipient, OPENSEA_CONDUIT_ADDRESS, OPENSEA_CONDUIT_KEY, SEAPORT_ADDRESS, ZERO_ADDRESS, type SupportedChainId } from '../constants.js';
+import { native, parsePositiveAmount } from '../format.js';
+import { bpsLabel, Card, inDays, percentLabel, shortHex, type CardPreview } from '../format-card.js';
 import { cancelledOrderHashes } from '../seaport/fulfill.js';
 import { chunkCancels, encodeSeaportCancel, prepareListingCancels, type SeaportCancelTarget } from '../seaport/cancel.js';
 import {
@@ -18,6 +19,7 @@ import {
   requirementFor,
   REQUIRED_FEE_BPS,
   royaltySourceLabel,
+  UNVERIFIED_ROYALTY_LABEL,
   verifyListingRoyalty,
 } from '../seaport/listing.js';
 import { applyOpenSeaMarkup, assertOpenSeaTwin, assertTwinCreatorFees, buildOpenSeaOrder, OpenSeaTwinError, usableOpenSeaTerms, type TwinRoyalty } from '../seaport/opensea.js';
@@ -40,6 +42,7 @@ import {
   type Ctx,
 } from './common.js';
 import { applyMinFloor, checkListingPrice, fetchCollectionReferences, type CollectionReferences } from './references.js';
+import { afterSends, txStep } from './tx-steps.js';
 
 export interface ListingInput {
   chainId: number;
@@ -112,7 +115,7 @@ export function assertOwnListingOrder(order: OrderComponents, expected: { chainI
   }
 }
 
-export async function previewListing(ctx: Ctx, input: ListingInput): Promise<{ text: string; plan: ListingPlan }> {
+export async function previewListing(ctx: Ctx, input: ListingInput): Promise<CardPreview<ListingPlan>> {
   const chainId = chainOf(input.chainId);
   if (!Array.isArray(input.items) || input.items.length === 0) throw new GuardError('Nothing to list.');
   if (input.items.length > MAX_LISTINGS_PER_REQUEST) throw new GuardError(`At most ${MAX_LISTINGS_PER_REQUEST} items per listing.`);
@@ -171,10 +174,14 @@ export async function previewListing(ctx: Ctx, input: ListingInput): Promise<{ t
   const onchainRoyalties = await Promise.all(items.map(item => readOnchainRoyalty(client, item.contract, item.tokenId, item.unitPriceWei * item.quantity)));
 
   const notes: string[] = [];
-  const lines: string[] = [];
+  const aiNotes: string[] = [];
   const orders: OrderComponents[] = [];
   const twins: Array<OrderComponents | null> = [];
   const twinRoyalties: TwinRoyalty[] = [];
+  const nameOf = (contract: string) => refsBy.get(contract)?.info?.name || shortHex(contract);
+  const card = new Card(items.length === 1 ? 'listing' : `listing of ${items.length} items`, chainId);
+  let totalSeller = 0n;
+  let totalListed = 0n;
   for (const [index, item] of items.entries()) {
     const requirement = requirementFor(requirements, item.contract, item.tokenId);
     if (requirement.blocked || blocked.includes(item.contract)) throw new GuardError(`${item.contract} only trades through OpenSea's own zone and cannot be listed on OSWiki. Nothing was signed.`);
@@ -217,8 +224,25 @@ export async function previewListing(ctx: Ctx, input: ListingInput): Promise<{ t
     assertOwnListingOrder(order, { chainId, offerer, contract: item.contract, tokenId: item.tokenId, quantity: item.quantity, unitPriceWei: item.unitPriceWei });
     orders.push(order);
 
+    const check = checkListingPrice(refs, { chainId, contract: item.contract, tokenId: item.tokenId, unitPriceWei: item.unitPriceWei, nowMs: ctx.now() });
+    totalSeller += amounts.seller;
+    totalListed += totalWei;
+    card.row(`${nameOf(item.contract)} #${item.tokenId}${item.isErc1155 ? ` ×${item.quantity}` : ''}`, native(totalWei, chainId));
+    card.row(`OSWiki fee ${bpsLabel(requirements.feeBps)}`, `−${native(amounts.fee, chainId)}`, 2);
+    if (royalty.recipient) {
+      card.row(`Royalty ${percentLabel(royalty.wei, totalWei)} → ${shortHex(royalty.recipient)}`, `−${native(royalty.wei, chainId)}`, 2);
+      if (royalty.source === 'ERC-2981') card.text('✓ matches on-chain ERC-2981 royaltyInfo', 4);
+      else card.warn(`Royalty ${UNVERIFIED_ROYALTY_LABEL}.`, 2);
+    } else {
+      card.row('Royalty', 'none', 2);
+    }
+    card.row('You receive', native(amounts.seller, chainId), 2);
+    card.text(`Reference: ${check.references}`, 2);
+    for (const warning of check.warnings) card.warn(warning, 2);
+    if (floorNote) card.warn(floorNote, 2);
+    aiNotes.push(`${item.contract} #${item.tokenId}: ${royalty.recipient ? `royalty ${native(royalty.wei, chainId)} to ${royalty.recipient}, ${royaltySourceLabel(royalty.source)}` : 'no royalty'}.`);
+
     let twin: OrderComponents | null = null;
-    let twinLines: string[] = [];
     if (input.crossListOpenSea) {
       const terms = usableOpenSeaTerms(requirement.opensea ?? null, chainId);
       let reason = 'OpenSea\'s terms for this collection are missing or failed the safety check (Seaport, conduit, OpenSea fee recipient, fee at most 1%, known zone)';
@@ -226,74 +250,77 @@ export async function previewListing(ctx: Ctx, input: ListingInput): Promise<{ t
         try {
           assertTwinCreatorFees(terms, twinRoyalty, offerer);
           twin = buildOpenSeaOrder(order, terms, undefined, markupBps);
-          twinLines = describeTwin(twin, order, twinRoyalty, chainId, markupBps, royaltySourceLabel(royalty.source));
+          describeTwin(card, aiNotes, twin, order, twinRoyalty, chainId, markupBps, royalty.source === 'ERC-2981');
         } catch (err) {
           twin = null;
           reason = err instanceof OpenSeaTwinError ? err.message : 'the OpenSea order could not be priced';
         }
       }
-      if (!twin) notes.push(`#${item.tokenId}: NOT cross-listed on OpenSea (${reason}). It is listed on OSWiki only.`);
+      if (!twin) card.warn(`#${item.tokenId}: NOT cross-listed on OpenSea (${reason}). It is listed on OSWiki only.`, 2);
     }
     twins.push(twin);
     twinRoyalties.push(twinRoyalty);
-
-    const check = checkListingPrice(refs, { chainId, contract: item.contract, tokenId: item.tokenId, unitPriceWei: item.unitPriceWei, nowMs: ctx.now() });
-    const name = refs.info?.name ? `${refs.info.name} ` : '';
-    lines.push(`- ${name}${item.contract} #${item.tokenId}${item.isErc1155 ? ` x${item.quantity}` : ''}: ${native(totalWei, chainId)}`
-      + ` | fee ${native(amounts.fee, chainId)} | royalty ${native(amounts.royalty, chainId)} | you receive ${native(amounts.seller, chainId)}`);
-    lines.push(royalty.recipient
-      ? `  royalty ${native(royalty.wei, chainId)} to ${addressLabel(royalty.recipient)}, ${royaltySourceLabel(royalty.source)}`
-      : '  no royalty');
-    lines.push(...twinLines);
-    lines.push(`  references: ${check.references}`);
-    for (const warning of check.warnings) lines.push(`  ${warning}`);
-    if (floorNote) lines.push(`  NOTE: ${floorNote}`);
   }
 
   const cancels: SeaportCancelTarget[] = [];
-  const cancelLines: string[] = [];
+  const cancelLines: Array<Array<[string, string]>> = [];
   if (myListings === null && items.some(item => !item.isErc1155)) {
-    notes.push('Could not load your existing listings: a cheaper older listing of the same token would stay fillable. Check with my_listings.');
+    notes.push('Could not load your existing listings: a cheaper older listing of the same token would stay fillable. Check them with my_listings.');
   }
   for (const item of items.filter(entry => !entry.isErc1155)) {
     const mine = (myListings ?? []).filter(listing => listing.contract === item.contract && listing.tokenId === item.tokenId);
-    const name = refsBy.get(item.contract)?.info?.name || item.contract;
+    const name = nameOf(item.contract);
     for (const listing of mine) {
       let targets: SeaportCancelTarget[];
       try {
         const stored = await ctx.api.askComponents(chainId, listing.id);
         targets = prepareListingCancels(listing.id, stored.components, stored.twin, offerer);
       } catch {
-        notes.push(`Could not verify your existing listing ${listing.id} of #${item.tokenId}, so it is NOT cancelled; if it is cheaper it stays fillable. Check with my_listings.`);
+        notes.push(`Could not verify your existing listing ${shortHex(listing.id)} of #${item.tokenId}, so it is NOT cancelled; if it is cheaper it stays fillable. Check it with my_listings.`);
         continue;
       }
       const verified = targets.filter(target => sameListedItem(target.components, item.contract, item.tokenId));
       const main = verified[0];
       if (!main || main.id !== listing.id) {
-        notes.push(`Your listing ${listing.id} is not for ${item.contract} #${item.tokenId} on-chain, so it is NOT cancelled.`);
+        notes.push(`Your listing ${shortHex(listing.id)} is not for ${name} #${item.tokenId} on-chain, so it is NOT cancelled.`);
         continue;
       }
       const existingTotal = orderTotal(main.components);
       if (existingTotal >= item.unitPriceWei * item.quantity) continue;
       cancels.push(...verified);
-      cancelLines.push(`- cancel your listing of ${name} #${item.tokenId} at ${native(existingTotal, chainId)} (${listing.id})`);
-      for (const twin of verified.slice(1)) cancelLines.push(`  and its linked OpenSea listing of ${name} #${item.tokenId} at ${native(orderTotal(twin.components), chainId)}`);
+      cancelLines.push([
+        [`your listing of ${name} #${item.tokenId}`, native(existingTotal, chainId)],
+        ...verified.slice(1).map((twin): [string, string] => ['and its linked OpenSea listing', native(orderTotal(twin.components), chainId)]),
+      ]);
+      aiNotes.push(`Cancels first: ${listing.id}${verified.length > 1 ? ` and its OpenSea twin ${verified.slice(1).map(twin => twin.id).join(', ')}` : ''}.`);
     }
   }
 
   const approvalsNeeded = contracts.filter((_, i) => !approvals[i]);
   const plan: ListingPlan = { kind: 'listing', chainId, wallet: offerer, counter, items, approvals: approvalsNeeded, cancels, orders, twins, twinRoyalties };
 
-  const text = [
-    `PREVIEW: list ${items.length} item${items.length === 1 ? '' : 's'} on ${chainId === 1 ? 'Ethereum' : 'ApeChain'} from ${offerer}, valid ${Math.round(seconds / 86400 * 10) / 10} days.`,
-    ...lines,
-    approvalsNeeded.length > 0 ? `Approvals (one transaction each, gas paid by you): setApprovalForAll(OpenSea conduit ${'0x1e0049783f008a0085193e00003d00cd54003c71'}) on ${approvalsNeeded.join(', ')}.` : 'No approval needed.',
-    cancels.length > 0 ? `First cancels ${cancels.filter(c => !c.twinOf).length} cheaper existing listing(s) of yours on-chain, otherwise they would stay fillable:` : '',
-    ...cancelLines,
-    ...notes.map(note => `NOTE: ${note}`),
-    `Seaport ${SEAPORT_ADDRESS}, counter ${counter}. Signing is free; the listing goes live once submitted.`,
+  card.rule();
+  if (items.length > 1) card.row('Listed total', native(totalListed, chainId)).row('You receive in total', native(totalSeller, chainId));
+  card.row('Expires', inDays(seconds, ctx.now()));
+  for (const contract of approvalsNeeded) card.text(`One-time approval: let the OpenSea conduit move your ${nameOf(contract)} when it sells (1 transaction, you pay gas).`);
+  if (approvalsNeeded.length === 0) card.text('No approval needed.');
+  if (cancelLines.length > 0) {
+    card.text(`First cancels ${cancelLines.length} cheaper listing${cancelLines.length === 1 ? '' : 's'} of yours on-chain, otherwise ${cancelLines.length === 1 ? 'it' : 'they'} would stay fillable:`);
+    for (const [first, ...rest] of cancelLines) {
+      card.row(`- ${first![0]}`, first![1], 2);
+      for (const [label, price] of rest) card.row(label, price, 4);
+    }
+  }
+  for (const note of notes) card.warn(note);
+  card.text('Signing is free; the listing goes live once submitted.')
+    .details([`Seaport ${shortHex(SEAPORT_ADDRESS)}`, `counter ${counter}`, `conduit ${shortHex(OPENSEA_CONDUIT_ADDRESS)}`]);
+  const note = [
+    `Listing ${items.length} item${items.length === 1 ? '' : 's'} from ${offerer}: ${items.map(item => `${item.contract} #${item.tokenId}`).join(', ')}.`,
+    ...aiNotes,
+    approvalsNeeded.length > 0 ? `Approvals: setApprovalForAll(OpenSea conduit ${OPENSEA_CONDUIT_ADDRESS}) on ${approvalsNeeded.join(', ')}.` : '',
+    `Seaport ${SEAPORT_ADDRESS}, counter ${counter}.`,
   ].filter(Boolean);
-  return { text: text.join('\n'), plan };
+  return { text: card.render(), plan, note };
 }
 
 export async function executeListing(ctx: Ctx, plan: ListingPlan, commit: () => void): Promise<string> {
@@ -317,76 +344,87 @@ export async function executeListing(ctx: Ctx, plan: ListingPlan, commit: () => 
   const log: string[] = [];
 
   commit();
-  for (const contract of stillNeeded) {
-    const sent = await sendGuardedTx(ctx.chains, ctx.account, { chainId, to: contract, data: setApprovalData(), value: 0n }, nftContracts);
-    log.push(`Approved the OpenSea conduit on ${contract} (tx ${sent.hash}).`);
-  }
-
-  for (const chunk of chunkCancels(plan.cancels)) {
-    const sent = await sendGuardedTx(ctx.chains, ctx.account, { chainId, to: SEAPORT_ADDRESS, data: encodeSeaportCancel(chunk.map(target => target.components)), value: 0n }, nftContracts);
-    const cancelled = cancelledOrderHashes(sent.logs);
-    const missed = chunk.filter(target => !target.twinOf && !cancelled.has(target.orderHash));
-    if (missed.length > 0) throw new Error(`The cancel transaction ${sent.hash} did not cancel ${missed.map(target => target.id).join(', ')}, so nothing new was listed.`);
-    log.push(`Cancelled ${chunk.filter(target => !target.twinOf).length} cheaper listing(s) (tx ${sent.hash}).`);
-  }
-
-  const twinOrders = plan.twins.filter((twin): twin is OrderComponents => twin !== null);
-  let signed: SignedSeaportOrder[];
-  const twinSigned = new Map<number, SignedSeaportOrder>();
-  if (plan.orders.length === 1 && twinOrders.length === 0) {
-    signed = [await signSeaportOrder(ctx.account, plan.orders[0]!, { chainId })];
-  } else {
-    const all = await signSeaportBulkOrders(ctx.account, [...plan.orders, ...twinOrders], { chainId });
-    signed = all.slice(0, plan.orders.length);
-    let next = plan.orders.length;
-    plan.twins.forEach((twin, i) => {
-      if (twin) twinSigned.set(i, all[next++]!);
-    });
-  }
-
-  const payload = (entry: SignedSeaportOrder) => ({ parameters: serializeOrderComponents(entry.order), signature: entry.signature, orderHash: entry.orderHash });
-  const twinPayload = (entry: SignedSeaportOrder | undefined) => (entry ? { parameters: serializeOrderComponents(entry.order), signature: entry.signature } : undefined);
-  const withTwins = (indexes: number[]) => indexes.flatMap(i => [signed[i]!.order, ...(twinSigned.has(i) ? [twinSigned.get(i)!.order] : [])]);
-  const rejected = (what: string, reason: string, indexes: number[]) => new RejectedOrderError([...log, rejectedOrdersText(chainId, what, reason, withTwins(indexes))].join('\n'));
-  if (signed.length === 1) {
-    let created;
-    try {
-      created = await ctx.api.createAsk(chainId, payload(signed[0]!), twinPayload(twinSigned.get(0)) ?? null);
-    } catch (err) {
-      throw rejected(`the signed listing oswiki-${signed[0]!.orderHash}`, err instanceof ApiError ? err.message : 'the request failed', [0]);
+  const run = async (): Promise<string> => {
+    for (const contract of stillNeeded) {
+      const sent = await txStep(log, `Approve the OpenSea conduit on ${contract}`, () => sendGuardedTx(ctx.chains, ctx.account, { chainId, to: contract, data: setApprovalData(), value: 0n }, nftContracts));
+      log.push(`Approved the OpenSea conduit on ${contract} (tx ${sent.hash}).`);
     }
-    log.push(`Listed: ${created.askId ?? `oswiki-${signed[0]!.orderHash}`}.`);
-    if (twinSigned.has(0)) log.push(created.crossListing ? `OpenSea cross-listing: ${created.crossListing.status}${created.crossListing.orderHash ? ` (${created.crossListing.orderHash})` : ''}.` : 'OpenSea cross-listing: sent.');
-  } else {
-    let result;
-    try {
-      result = await ctx.api.createAsksBulk(chainId, signed.map((entry, i) => {
-        const twin = twinPayload(twinSigned.get(i));
-        return twin ? { seaport: payload(entry), opensea: twin } : { seaport: payload(entry) };
-      }));
-    } catch (err) {
-      throw rejected(`the ${signed.length} signed listings`, err instanceof ApiError ? err.message : 'the request failed', signed.map((_, i) => i));
+
+    for (const chunk of chunkCancels(plan.cancels)) {
+      const sent = await txStep(log, 'Cancel your cheaper listings', () => sendGuardedTx(ctx.chains, ctx.account, { chainId, to: SEAPORT_ADDRESS, data: encodeSeaportCancel(chunk.map(target => target.components)), value: 0n }, nftContracts));
+      const cancelled = cancelledOrderHashes(sent.logs);
+      const missed = chunk.filter(target => !target.twinOf && !cancelled.has(target.orderHash));
+      if (missed.length > 0) {
+        log.push(`Cancel transaction ${sent.hash} confirmed but did not cancel ${missed.map(target => target.id).join(', ')}.`);
+        throw new Error(`The cancel transaction ${sent.hash} did not cancel ${missed.map(target => target.id).join(', ')}, so nothing new was listed.`);
+      }
+      log.push(`Cancelled ${chunk.filter(target => !target.twinOf).length} cheaper listing(s) (tx ${sent.hash}).`);
     }
-    log.push(`Listed ${result.created} of ${signed.length}${result.failed > 0 ? `, ${result.failed} rejected` : ''}.`);
-    for (const failure of result.results.filter(entry => !entry.success)) {
-      log.push(`- rejected ${failure.contractAddress ?? ''} #${failure.tokenId ?? '?'}: ${failure.message ?? failure.code ?? 'unknown reason'}`);
+
+    const twinOrders = plan.twins.filter((twin): twin is OrderComponents => twin !== null);
+    let signed: SignedSeaportOrder[];
+    const twinSigned = new Map<number, SignedSeaportOrder>();
+    if (plan.orders.length === 1 && twinOrders.length === 0) {
+      signed = [await signSeaportOrder(ctx.account, plan.orders[0]!, { chainId })];
+    } else {
+      const all = await signSeaportBulkOrders(ctx.account, [...plan.orders, ...twinOrders], { chainId });
+      signed = all.slice(0, plan.orders.length);
+      let next = plan.orders.length;
+      plan.twins.forEach((twin, i) => {
+        if (twin) twinSigned.set(i, all[next++]!);
+      });
     }
-    const missing = unacceptedIndexes(signed, result, 'askId');
-    if (missing.length > 0) throw rejected(`${missing.length} of the signed listings`, 'see the rejections above', missing);
+
+    const payload = (entry: SignedSeaportOrder) => ({ parameters: serializeOrderComponents(entry.order), signature: entry.signature, orderHash: entry.orderHash });
+    const twinPayload = (entry: SignedSeaportOrder | undefined) => (entry ? { parameters: serializeOrderComponents(entry.order), signature: entry.signature } : undefined);
+    const withTwins = (indexes: number[]) => indexes.flatMap(i => [signed[i]!.order, ...(twinSigned.has(i) ? [twinSigned.get(i)!.order] : [])]);
+    const rejected = (what: string, reason: string, indexes: number[]) => new RejectedOrderError([...log, rejectedOrdersText(chainId, what, reason, withTwins(indexes))].join('\n'));
+    if (signed.length === 1) {
+      let created;
+      try {
+        created = await ctx.api.createAsk(chainId, payload(signed[0]!), twinPayload(twinSigned.get(0)) ?? null);
+      } catch (err) {
+        throw rejected(`the signed listing oswiki-${signed[0]!.orderHash}`, err instanceof ApiError ? err.message : 'the request failed', [0]);
+      }
+      log.push(`Listed: ${created.askId ?? `oswiki-${signed[0]!.orderHash}`}.`);
+      if (twinSigned.has(0)) log.push(created.crossListing ? `OpenSea cross-listing: ${created.crossListing.status}${created.crossListing.orderHash ? ` (${created.crossListing.orderHash})` : ''}.` : 'OpenSea cross-listing: sent.');
+    } else {
+      let result;
+      try {
+        result = await ctx.api.createAsksBulk(chainId, signed.map((entry, i) => {
+          const twin = twinPayload(twinSigned.get(i));
+          return twin ? { seaport: payload(entry), opensea: twin } : { seaport: payload(entry) };
+        }));
+      } catch (err) {
+        throw rejected(`the ${signed.length} signed listings`, err instanceof ApiError ? err.message : 'the request failed', signed.map((_, i) => i));
+      }
+      log.push(`Listed ${result.created} of ${signed.length}${result.failed > 0 ? `, ${result.failed} rejected` : ''}.`);
+      for (const failure of result.results.filter(entry => !entry.success)) {
+        log.push(`- rejected ${failure.contractAddress ?? ''} #${failure.tokenId ?? '?'}: ${failure.message ?? failure.code ?? 'unknown reason'}`);
+      }
+      const missing = unacceptedIndexes(signed, result, 'askId');
+      if (missing.length > 0) throw rejected(`${missing.length} of the signed listings`, 'see the rejections above', missing);
+    }
+    return log.join('\n');
+  };
+  try {
+    return await run();
+  } catch (err) {
+    throw afterSends(log, err);
   }
-  return log.join('\n');
 }
 
-function describeTwin(twin: OrderComponents, oswiki: OrderComponents, royalty: TwinRoyalty, chainId: number, markupBps: number, royaltyLabel: string): string[] {
+function describeTwin(card: Card, aiNotes: string[], twin: OrderComponents, oswiki: OrderComponents, royalty: TwinRoyalty, chainId: number, markupBps: number, onchainRoyalty: boolean): void {
   const summary = assertOpenSeaTwin(twin, oswiki, royalty);
   const quantity = oswiki.offer[0]!.startAmount;
   const asked = applyOpenSeaMarkup(orderTotal(oswiki) / quantity, markupBps) * quantity;
-  const zone = twin.zone === ZERO_ADDRESS ? 'open zone' : `OpenSea signed zone ${twin.zone}`;
-  return [
-    `  OpenSea: listed at ${native(summary.total, chainId)} (${zone}), you receive ${native(summary.seller, chainId)} there`
-      + (summary.total > asked ? ` (raised from ${native(asked, chainId)} so the OpenSea payout is not below the OSWiki one)` : ''),
-    ...summary.fees.map(fee => `    ${fee.kind === 'opensea' ? 'OpenSea fee' : 'creator fee'} ${native(fee.amount, chainId)} to ${addressLabel(fee.recipient)}${fee.kind === 'creator' ? `, ${royaltyLabel}` : ''}`),
-  ];
+  card.row('Also on OpenSea at', native(summary.total, chainId), 2);
+  for (const fee of summary.fees) {
+    card.row(fee.kind === 'opensea' ? `OpenSea fee ${percentLabel(fee.amount, summary.total)}` : `Creator fee ${percentLabel(fee.amount, summary.total)} → ${shortHex(fee.recipient)}`, `−${native(fee.amount, chainId)}`, 4);
+    if (fee.kind === 'creator' && !onchainRoyalty) card.warn(`Creator fee ${UNVERIFIED_ROYALTY_LABEL}.`, 4);
+  }
+  card.row('You receive there', native(summary.seller, chainId), 4);
+  if (summary.total > asked) card.text(`(raised from ${native(asked, chainId)} so the OpenSea payout is not below the OSWiki one)`, 4);
+  if (twin.zone !== ZERO_ADDRESS) card.text(`OpenSea signed zone ${shortHex(twin.zone)}`, 4);
+  aiNotes.push(`OpenSea twin: ${twin.zone === ZERO_ADDRESS ? 'open zone' : `OpenSea signed zone ${twin.zone}`}; fees ${summary.fees.map(fee => `${fee.kind} ${native(fee.amount, chainId)} to ${fee.recipient}`).join(', ') || 'none'}.`);
 }
-
-export { CONFIRM_FOOTER };

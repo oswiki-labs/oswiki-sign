@@ -15,8 +15,10 @@ import { executeListing, previewListing, type ListingPlan } from './flows/listin
 import { executeOffer, previewOffer, type OfferPlan } from './flows/offer.js';
 import { NO_DIALOG_SETTINGS, updateLimits, type LimitsInput } from './flows/limits.js';
 import { myListings, myOffers, walletStatus } from './flows/status.js';
+import { TradeStoppedError } from './flows/tx-steps.js';
 import { executeTransfer, executeUnwrap, NO_DIALOG_SEND, previewTransfer, previewUnwrap, SendStoppedError, transferCharge, type TransferPlan, type UnwrapPlan } from './flows/transfer.js';
 import { CONFIRM_FOOTER, CONFIRM_OFF_FOOTER, CONFIRM_OFF_RULE } from './format.js';
+import { addCardWarning, type CardPreview } from './format-card.js';
 import type { Scrubber } from './secret.js';
 import type { SettingsStore } from './settings.js';
 import type { Charge, Limits } from './state.js';
@@ -171,6 +173,20 @@ export const NO_DIALOG_REFUSAL = [
   'Use an MCP client that supports elicitation. Only if the user decides to trust the AI\'s confirmation instead, they can set OSWIKI_CONFIRM_MODE=ai (or off) in the env block of oswiki-sign, or run its setup again, and restart the client.',
 ].join(' ');
 
+export const DIALOG_HEADER = 'oswiki-sign (your local signer, not the AI) asks you to approve this trade.';
+
+export const DIALOG_TITLE: Record<Plan['kind'], string> = {
+  listing: 'Sign this listing',
+  buy: 'Buy for the total shown',
+  cancel: 'Cancel these orders',
+  offer: 'Sign this offer',
+  accept: 'Sell for the amount shown',
+  transfer: 'Send these to the recipient shown',
+  unwrap: 'Unwrap as shown',
+};
+
+export const CARD_TRAILER = 'For you (the AI), not part of the dialog: show the user the card above as it is, including every warning line, and point out each warning.';
+
 export type HumanDecision = 'confirmed' | 'declined';
 
 export interface HumanConfirmer {
@@ -207,7 +223,7 @@ export function elicitationConfirmer(server: Server, timeoutMs = CONFIRM_DIALOG_
 
 export function errorText(err: unknown): string {
   if (err instanceof BaseError) return sanitizeErrorText(err);
-  if (err instanceof RejectedOrderError || err instanceof SendStoppedError) return err.message;
+  if (err instanceof RejectedOrderError || err instanceof SendStoppedError || err instanceof TradeStoppedError) return err.message;
   const message = typeof (err as { message?: unknown } | null)?.message === 'string' ? (err as Error).message : '';
   return sanitizeServerText(message.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]'), 600) || 'unknown error';
 }
@@ -256,14 +272,25 @@ export function createToolHandler(ctx: Ctx, scrub: Scrubber, options: { store?: 
     return 'This MCP client cannot show the confirmation dialog, so execute will be refused (OSWIKI_CONFIRM_MODE is human).';
   };
 
-  const withConfirm = async (preview: Promise<{ text: string; plan: Plan }>): Promise<string> => {
-    const { text, plan } = await preview;
-    const dry = ctx.config.dryRun ? '\nDRY RUN is on (OSWIKI_DRY_RUN=1): execute will only report, nothing is signed or sent.' : '';
-    const summary = `${text}${dry}`;
-    const confirmId = store.create(plan, summary);
-    if (plan.kind === 'transfer') return `${summary}\nOn execute, oswiki-sign asks the user to approve this send in its own dialog (always, whatever the confirmation mode).\n${CONFIRM_FOOTER(confirmId)}`;
-    const footer = ctx.config.confirmMode === 'off' ? CONFIRM_OFF_FOOTER(confirmId) : CONFIRM_FOOTER(confirmId);
-    return `${summary}\n${modeNote()}\n${footer}`;
+  const cardNotice = (plan: Plan): string | null => {
+    if (ctx.config.dryRun) return 'Dry run is on: nothing will be signed or sent.';
+    if (plan.kind === 'transfer') return null;
+    if (ctx.config.confirmMode === 'off') return 'Confirmation is off: this runs without a confirmation dialog, on the AI\'s word, within your limits.';
+    if (ctx.config.confirmMode === 'ai' && !handler.confirmer.available()) return 'No confirmation dialog here: the AI runs this once you confirm in the chat.';
+    return null;
+  };
+
+  /** The card is what the dialog shows; the trailer after it is for the AI only and never reaches the dialog. */
+  const withConfirm = async (preview: Promise<CardPreview<Plan>>): Promise<string> => {
+    const { text, plan, note = [] } = await preview;
+    const notice = cardNotice(plan);
+    const card = notice ? addCardWarning(text, notice) : text;
+    const confirmId = store.create(plan, card);
+    const dry = ctx.config.dryRun ? 'DRY RUN is on (OSWIKI_DRY_RUN=1): execute will only report, nothing is signed or sent.' : '';
+    const trailer = plan.kind === 'transfer'
+      ? ['On execute, oswiki-sign asks the user to approve this send in its own dialog (always, whatever the confirmation mode).', CONFIRM_FOOTER(confirmId)]
+      : [modeNote(), ctx.config.confirmMode === 'off' ? CONFIRM_OFF_FOOTER(confirmId) : CONFIRM_FOOTER(confirmId)];
+    return `${card}\n\n${[CARD_TRAILER, ...note, dry, ...trailer].filter(Boolean).join('\n')}`;
   };
 
   const requireSendApproval = async (summary: string): Promise<void> => {
@@ -271,20 +298,20 @@ export function createToolHandler(ctx: Ctx, scrub: Scrubber, options: { store?: 
     if (!confirmer.available()) throw new ConfirmError(NO_DIALOG_SEND);
     let decision: HumanDecision;
     try {
-      decision = await confirmer.ask(`oswiki-sign (your local signer, not the AI) asks you to approve this SEND. It leaves your wallet and cannot be undone. Check the recipient address:\n\n${summary}`, 'Send these to the recipient shown');
+      decision = await confirmer.ask(`oswiki-sign (your local signer, not the AI) asks you to approve this send. It leaves your wallet and cannot be undone: check the recipient address.\n\n${summary}`, 'Send these to the recipient shown');
     } catch (err) {
       throw new ConfirmError(`The confirmation dialog failed (${errorText(err)}). Nothing was sent.`);
     }
     if (decision !== 'confirmed') throw new ConfirmError('The user did not approve the send in the confirmation dialog. Nothing was sent. Do not retry unless the user asks again.');
   };
 
-  const requireHuman = async (summary: string): Promise<void> => {
+  const requireHuman = async (summary: string, kind: Plan['kind']): Promise<void> => {
     if (ctx.config.confirmMode === 'off') return;
     const confirmer = handler.confirmer;
     if (confirmer.available()) {
       let decision: HumanDecision;
       try {
-        decision = await confirmer.ask(`oswiki-sign (your local signer, not the AI) asks you to approve this trade:\n\n${summary}`);
+        decision = await confirmer.ask(`${DIALOG_HEADER}\n\n${summary}`, DIALOG_TITLE[kind]);
       } catch (err) {
         throw new ConfirmError(`The confirmation dialog failed (${errorText(err)}). Nothing was signed or sent.`);
       }
@@ -303,7 +330,7 @@ export function createToolHandler(ctx: Ctx, scrub: Scrubber, options: { store?: 
     ctx.state.check(charge, limits);
     await assertNoPendingTx(ctx.chains, ctx.account, plan.chainId, ctx.now);
     if (plan.kind === 'transfer') await requireSendApproval(summary);
-    else await requireHuman(summary);
+    else await requireHuman(summary, plan.kind);
     let committed = false;
     const commit = () => {
       if (committed) return;

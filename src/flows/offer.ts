@@ -3,8 +3,9 @@ import { encodeFunctionData, type Address } from 'viem';
 import { WRAPPED_NATIVE_ABI } from '../abi.js';
 import { ApiError } from '../api.js';
 import { sendGuardedTx } from '../chain.js';
-import { getOswikiFeeRecipient, NATIVE_SYMBOL, SEAPORT_ADDRESS, WRAPPED_NATIVE, ZERO_ADDRESS, ZERO_BYTES32, type SupportedChainId } from '../constants.js';
+import { getOswikiFeeRecipient, NATIVE_SYMBOL, SEAPORT_ADDRESS, WRAPPED_NATIVE, WRAPPED_SYMBOL, ZERO_ADDRESS, ZERO_BYTES32, type SupportedChainId } from '../constants.js';
 import { native, parsePositiveAmount, wrapped } from '../format.js';
+import { bpsLabel, Card, inDays, percentLabel, shortHex, type CardPreview } from '../format-card.js';
 import {
   assertOfferRequirements,
   MAX_OFFERS_PER_REQUEST,
@@ -16,6 +17,7 @@ import { REQUIRED_FEE_BPS } from '../seaport/listing.js';
 import { buildOfferOrder, serializeOrderComponents, type OfferKind, type OrderComponents } from '../seaport/order.js';
 import { signSeaportBulkOrders, signSeaportOrder, type SignedSeaportOrder } from '../seaport/sign.js';
 import { ADDRESS_RE, assertBuyingEnabled, assertCollectionAllowed, assertMaxBuy, chainOf, GuardError, me, readIsErc1155, RejectedOrderError, rejectedOrdersText, TOKEN_ID_RE, unacceptedIndexes, type Ctx } from './common.js';
+import { afterSends, txStep } from './tx-steps.js';
 
 export interface OfferInput {
   chainId: number;
@@ -80,7 +82,7 @@ export function boundedAllowance(input: { openOffersWei: bigint | null; currentA
   return wanted < cap ? wanted : cap;
 }
 
-export async function previewOffer(ctx: Ctx, input: OfferInput): Promise<{ text: string; plan: OfferPlan }> {
+export async function previewOffer(ctx: Ctx, input: OfferInput): Promise<CardPreview<OfferPlan>> {
   const chainId = chainOf(input.chainId);
   assertBuyingEnabled(ctx.config, chainId);
   if (typeof input.contract !== 'string' || !ADDRESS_RE.test(input.contract)) throw new GuardError('contract must be a 0x address.');
@@ -102,11 +104,12 @@ export async function previewOffer(ctx: Ctx, input: OfferInput): Promise<{ text:
   const tokenId = offerKind === 'item' ? String(input.tokenId) : null;
   const items: OfferItemRequest[] = [{ kind: offerKind, contract, tokenId, amountWei, quantity }];
   const client = ctx.chains.client(chainId);
-  const [requirements, funding, isErc1155, openOffers] = await Promise.all([
+  const [requirements, funding, isErc1155, openOffers, collectionName] = await Promise.all([
     ctx.api.offerRequirements({ chainId, maker: offerer, items: [{ kind: offerKind, contract, tokenId, amountWei: amountWei.toString(), quantity }] }),
     readOfferFunding(client, chainId, offerer),
     readIsErc1155(client, contract),
     ownOpenOffersWei(ctx, chainId, offerer),
+    ctx.api.collection(chainId, contract).then(info => info.name || null, () => null),
   ]);
   const checked = assertOfferRequirements(requirements, { chainId, maker: offerer, items });
   const requirement = checked.items[0]!;
@@ -139,16 +142,31 @@ export async function previewOffer(ctx: Ctx, input: OfferInput): Promise<{ text:
   const plan: OfferPlan = { kind: 'offer', chainId, wallet: offerer, offerKind, contract, tokenId, amountWei, quantity, counter: funding.counter, wrapWei, requiredAllowanceWei, orders };
   for (const order of orders) assertOwnOffer(order, plan);
 
-  const text = [
-    `PREVIEW: ${offerKind === 'item' ? `offer on ${contract} #${tokenId}` : `${quantity} collection offer${quantity === 1 ? '' : 's'} on ${contract} (any token)`} on ${chainId === 1 ? 'Ethereum' : 'ApeChain'}, valid ${Math.round(seconds / 86400 * 10) / 10} days.`,
-    `- ${wrapped(amountWei, chainId)} each${quantity > 1 ? `, ${wrapped(total, chainId)} in total` : ''}. A seller receives ${wrapped(requirement.sellerNetWeiBig, chainId)} (fee ${wrapped(requirement.feeWeiBig, chainId)}, royalty ${wrapped(requirement.royaltyWeiBig, chainId)}).`,
-    wrapWei > 0n ? `- Wrap ${native(wrapWei, chainId)} into ${wrapped(wrapWei, chainId)} first (one transaction).` : `- No wrap needed (${wrapped(funding.wrappedBalance, chainId)} available).`,
-    approve
-      ? `- Approve exactly ${wrapped(requiredAllowanceWei, chainId)} to Seaport ${SEAPORT_ADDRESS} (${openOffers === null ? 'your open offers could not be loaded: current allowance' : `your open OSWiki offers ${wrapped(openOffers, chainId)}`} + this one, capped at your balance + this one; never unlimited).`
-      : '- No approval needed.',
-    'Signing the offer is free; it can be accepted by any holder until it expires or is cancelled.',
-  ];
-  return { text: text.join('\n'), plan };
+  const name = collectionName || shortHex(contract);
+  const what = offerKind === 'item' ? `${name} #${tokenId}` : `${quantity} × any ${name}`;
+  const card = new Card(offerKind === 'item' ? 'offer' : 'collection offer', chainId)
+    .row(what, wrapped(total, chainId));
+  if (quantity > 1) card.row('Each', wrapped(amountWei, chainId), 2);
+  card.row(`OSWiki fee ${bpsLabel(REQUIRED_FEE_BPS)}`, `−${wrapped(requirement.feeWeiBig, chainId)}`, 2)
+    .row(requirement.royaltyWeiBig > 0n ? `Royalty ${percentLabel(requirement.royaltyWeiBig, amountWei)}` : 'Royalty', requirement.royaltyWeiBig > 0n ? `−${wrapped(requirement.royaltyWeiBig, chainId)}` : 'none', 2)
+    .row(quantity > 1 ? 'Each seller receives' : 'Seller receives', wrapped(requirement.sellerNetWeiBig, chainId), 2)
+    .rule();
+  if (wrapWei > 0n) card.row('First wrap (1 transaction)', `${native(wrapWei, chainId)} → ${WRAPPED_SYMBOL[chainId]}`);
+  else card.text(`No wrap needed (${wrapped(funding.wrappedBalance, chainId)} available).`);
+  if (approve) {
+    card.row('Approve (1 transaction)', wrapped(requiredAllowanceWei, chainId));
+    card.text(`Seaport may spend exactly this: ${openOffers === null ? 'your current allowance (your open offers could not be loaded)' : `your open OSWiki offers ${wrapped(openOffers, chainId)}`} + this one, capped at your balance + this one; never unlimited.`, 2);
+  } else {
+    card.text('No approval needed.');
+  }
+  card.row('Expires', inDays(seconds, ctx.now()))
+    .text(`Signing is free; ${offerKind === 'item' ? 'the owner' : 'any holder'} can accept until it expires or you cancel it.`)
+    .details([`Seaport ${shortHex(SEAPORT_ADDRESS)}`, `counter ${funding.counter}`, `${WRAPPED_SYMBOL[chainId]} ${shortHex(WRAPPED_NATIVE[chainId]!)}`, `collection ${shortHex(contract)}`]);
+  const note = [
+    `${offerKind === 'item' ? `Item offer on ${contract} #${tokenId}` : `${quantity} collection offer${quantity === 1 ? '' : 's'} on ${contract} (any token)`}.`,
+    approve ? `Approves exactly ${wrapped(requiredAllowanceWei, chainId)} to Seaport ${SEAPORT_ADDRESS}.` : '',
+  ].filter(Boolean);
+  return { text: card.render(), plan, note };
 }
 
 export async function executeOffer(ctx: Ctx, plan: OfferPlan, commit: () => void): Promise<string> {
@@ -168,41 +186,48 @@ export async function executeOffer(ctx: Ctx, plan: OfferPlan, commit: () => void
   const currency = WRAPPED_NATIVE[chainId]!;
   const log: string[] = [];
   commit();
-  if (shortfall > 0n) {
-    const sent = await sendGuardedTx(ctx.chains, ctx.account, { chainId, to: currency, data: encodeFunctionData({ abi: WRAPPED_NATIVE_ABI, functionName: 'deposit' }), value: shortfall }, new Set());
-    log.push(`Wrapped ${native(shortfall, chainId)} (tx ${sent.hash}).`);
-  }
-  if (funding.allowance < plan.requiredAllowanceWei) {
-    const data = encodeFunctionData({ abi: WRAPPED_NATIVE_ABI, functionName: 'approve', args: [SEAPORT_ADDRESS, plan.requiredAllowanceWei] });
-    const sent = await sendGuardedTx(ctx.chains, ctx.account, { chainId, to: currency, data, value: 0n }, new Set());
-    log.push(`Approved exactly ${wrapped(plan.requiredAllowanceWei, chainId)} to Seaport (tx ${sent.hash}).`);
-  }
+  const run = async (): Promise<string> => {
+    if (shortfall > 0n) {
+      const sent = await txStep(log, `Wrap ${native(shortfall, chainId)}`, () => sendGuardedTx(ctx.chains, ctx.account, { chainId, to: currency, data: encodeFunctionData({ abi: WRAPPED_NATIVE_ABI, functionName: 'deposit' }), value: shortfall }, new Set()));
+      log.push(`Wrapped ${native(shortfall, chainId)} (tx ${sent.hash}).`);
+    }
+    if (funding.allowance < plan.requiredAllowanceWei) {
+      const data = encodeFunctionData({ abi: WRAPPED_NATIVE_ABI, functionName: 'approve', args: [SEAPORT_ADDRESS, plan.requiredAllowanceWei] });
+      const sent = await txStep(log, `Approve ${wrapped(plan.requiredAllowanceWei, chainId)} to Seaport`, () => sendGuardedTx(ctx.chains, ctx.account, { chainId, to: currency, data, value: 0n }, new Set()));
+      log.push(`Approved exactly ${wrapped(plan.requiredAllowanceWei, chainId)} to Seaport (tx ${sent.hash}).`);
+    }
 
-  const signed: SignedSeaportOrder[] = plan.orders.length === 1
-    ? [await signSeaportOrder(ctx.account, plan.orders[0]!, { chainId })]
-    : await signSeaportBulkOrders(ctx.account, plan.orders, { chainId });
-  const payloads = signed.map(entry => ({ parameters: serializeOrderComponents(entry.order), signature: entry.signature, orderHash: entry.orderHash }));
-  const rejected = (what: string, reason: string, indexes: number[]) => new RejectedOrderError([...log, rejectedOrdersText(chainId, what, reason, indexes.map(i => signed[i]!.order))].join('\n'));
-  const reasonOf = (err: unknown) => (err instanceof ApiError ? err.message : 'the request failed');
-  if (payloads.length === 1) {
-    let created;
-    try {
-      created = await ctx.api.createBid(chainId, payloads[0]!);
-    } catch (err) {
-      throw rejected(`the signed offer oswiki-${signed[0]!.orderHash}`, reasonOf(err), [0]);
+    const signed: SignedSeaportOrder[] = plan.orders.length === 1
+      ? [await signSeaportOrder(ctx.account, plan.orders[0]!, { chainId })]
+      : await signSeaportBulkOrders(ctx.account, plan.orders, { chainId });
+    const payloads = signed.map(entry => ({ parameters: serializeOrderComponents(entry.order), signature: entry.signature, orderHash: entry.orderHash }));
+    const rejected = (what: string, reason: string, indexes: number[]) => new RejectedOrderError([...log, rejectedOrdersText(chainId, what, reason, indexes.map(i => signed[i]!.order))].join('\n'));
+    const reasonOf = (err: unknown) => (err instanceof ApiError ? err.message : 'the request failed');
+    if (payloads.length === 1) {
+      let created;
+      try {
+        created = await ctx.api.createBid(chainId, payloads[0]!);
+      } catch (err) {
+        throw rejected(`the signed offer oswiki-${signed[0]!.orderHash}`, reasonOf(err), [0]);
+      }
+      log.push(`Offer placed: ${created.bidId ?? `oswiki-${signed[0]!.orderHash}`}.`);
+    } else {
+      let result;
+      try {
+        result = await ctx.api.createBidsBulk(chainId, payloads.map(seaport => ({ seaport })));
+      } catch (err) {
+        throw rejected(`the ${payloads.length} signed offers`, reasonOf(err), payloads.map((_, i) => i));
+      }
+      log.push(`Placed ${result.created} of ${payloads.length} offers${result.failed > 0 ? `, ${result.failed} rejected` : ''}.`);
+      for (const failure of result.results.filter(entry => !entry.success)) log.push(`- rejected: ${failure.message ?? failure.code ?? 'unknown reason'}`);
+      const missing = unacceptedIndexes(signed, result, 'bidId');
+      if (missing.length > 0) throw rejected(`${missing.length} of the signed offers`, 'see the rejections above', missing);
     }
-    log.push(`Offer placed: ${created.bidId ?? `oswiki-${signed[0]!.orderHash}`}.`);
-  } else {
-    let result;
-    try {
-      result = await ctx.api.createBidsBulk(chainId, payloads.map(seaport => ({ seaport })));
-    } catch (err) {
-      throw rejected(`the ${payloads.length} signed offers`, reasonOf(err), payloads.map((_, i) => i));
-    }
-    log.push(`Placed ${result.created} of ${payloads.length} offers${result.failed > 0 ? `, ${result.failed} rejected` : ''}.`);
-    for (const failure of result.results.filter(entry => !entry.success)) log.push(`- rejected: ${failure.message ?? failure.code ?? 'unknown reason'}`);
-    const missing = unacceptedIndexes(signed, result, 'bidId');
-    if (missing.length > 0) throw rejected(`${missing.length} of the signed offers`, 'see the rejections above', missing);
+    return log.join('\n');
+  };
+  try {
+    return await run();
+  } catch (err) {
+    throw afterSends(log, err);
   }
-  return log.join('\n');
 }

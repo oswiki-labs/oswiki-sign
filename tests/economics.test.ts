@@ -23,7 +23,7 @@ import {
 } from '../src/seaport/opensea.js';
 import { buildListingOrder, pickOrderComponents, type OrderComponents } from '../src/seaport/order.js';
 import vectors from './fixtures/seaport-vectors.json' with { type: 'json' };
-import { COLLECTION, confirmIdOf, ETH, harness, listingRequirements, MAINNET_FEE_RECIPIENT, makeTransport, OTHER_SELLER, ROYALTY_RECIPIENT, TEST_ADDRESS, type Harness } from './helpers.js';
+import { COLLECTION, confirmIdOf, ETH, flat, harness, listingRequirements, MAINNET_FEE_RECIPIENT, makeTransport, OTHER_SELLER, ROYALTY_RECIPIENT, TEST_ADDRESS, type Harness } from './helpers.js';
 
 const BEEF = '0x000000000000000000000000000000000000beef';
 const ROYALTY_INFO = '0x2a55205a';
@@ -126,7 +126,7 @@ describe('H1: OpenSea twin economics', () => {
     h.chain.approvals.add(COLLECTION);
     const { text, plan } = await previewListing(h.ctx, listArgs('1', { crossListOpenSea: true }));
     expect(plan.twins).toEqual([null]);
-    expect(text).toMatch(/NOT cross-listed on OpenSea \(OpenSea asks for a creator fee to 0x000000000000000000000000000000000000beef/);
+    expect(flat(text)).toMatch(/NOT cross-listed on OpenSea \(OpenSea asks for a creator fee to 0x000000000000000000000000000000000000beef/);
 
     const preview = await h.call('preview_listing', listArgs('1', { crossListOpenSea: true }));
     const result = await h.call('execute', { confirmId: confirmIdOf(preview.text) });
@@ -197,9 +197,11 @@ describe('H1: OpenSea twin economics', () => {
     setupListing(h, { opensea: osTerms() });
     const { text, plan } = await previewListing(h.ctx, listArgs('1', { crossListOpenSea: true, openSeaMarkupBps: 200 }));
     expect(plan.twins[0]).not.toBeNull();
-    expect(text).toContain('OpenSea: listed at 1.02 ETH (OpenSea signed zone 0x000056f7000000ece9003ca63978907a00ffd100), you receive 0.9588 ETH there');
-    expect(text).toContain(`OpenSea fee 0.0102 ETH to 0x0000...a719 (${OPENSEA_FEE_RECIPIENT})`);
-    expect(text).toContain(`creator fee 0.051 ETH to 0x0000...dead (${ROYALTY_RECIPIENT})`);
+    expect(text).toMatch(/\n {2}Also on OpenSea at +1\.02 ETH\n/);
+    expect(text).toMatch(/\n {4}You receive there +0\.9588 ETH\n/);
+    expect(text).toContain('OpenSea signed zone 0x0000…d100');
+    expect(text).toMatch(/\n {4}OpenSea fee 1% +−0\.0102 ETH\n/);
+    expect(text).toMatch(/\n {4}Creator fee 5% → 0x0000…dead +−0\.051 ETH\n/);
   });
 
   it('submits a twin that pays only the seller, OpenSea and the royalty recipient, and sanitizes the server reply', async () => {
@@ -223,7 +225,7 @@ describe('M2: the OSWiki royalty is verified', () => {
     setupListing(h, { hostedRoyalty: null });
     withOnchainRoyalty(h, { recipient: ROYALTY_RECIPIENT, bps: 500 });
     const { text } = await previewListing(h.ctx, listArgs('1'));
-    expect(text).toContain(`royalty 0.05 ETH to 0x0000...dead (${ROYALTY_RECIPIENT}), checked against the collection's on-chain ERC-2981 royaltyInfo`);
+    expect(text).toMatch(/\n {2}Royalty 5% → 0x0000…dead +−0\.05 ETH\n {4}✓ matches on-chain ERC-2981 royaltyInfo\n/);
   });
 
   it('refuses a royalty recipient the collection does not name on-chain, even when the hosted settings agree', async () => {
@@ -247,7 +249,8 @@ describe('M2: the OSWiki royalty is verified', () => {
     const ok = harness();
     setupListing(ok);
     const okText = (await previewListing(ok.ctx, listArgs('1'))).text;
-    expect(okText).toContain(`royalty 0.05 ETH to 0x0000...dead (${ROYALTY_RECIPIENT}), UNVERIFIED (from OSWiki API, collection has no on-chain royalty info)`);
+    expect(okText).toMatch(/\n {2}Royalty 5% → 0x0000…dead +−0\.05 ETH\n/);
+    expect(flat(okText)).toContain('⚠ Royalty UNVERIFIED (from OSWiki API, collection has no on-chain royalty info).');
     expect(okText).not.toContain('royalty settings');
   });
 
@@ -265,7 +268,7 @@ describe('M3: floor guard', () => {
     setupListing(h, { floor: 0.1, cheapest: 2 });
     await expect(previewListing(h.ctx, listArgs('0.5'))).rejects.toThrow(/below 50% of the floor \(2 ETH\)/);
     const { text } = await previewListing(h.ctx, listArgs('1.5'));
-    expect(text).toMatch(/WARNING: the API floor \(0\.1 ETH\) and the cheapest active listing on any marketplace \(2 ETH\) differ by more than 5x/);
+    expect(flat(text)).toMatch(/⚠ The API floor \(0\.1 ETH\) and the cheapest active listing on any marketplace \(2 ETH\) differ by more than 5x/);
   });
 
   it('never lets the OSWiki-only cheapest listing raise the all-marketplace floor', async () => {
@@ -278,7 +281,7 @@ describe('M3: floor guard', () => {
       return url.searchParams.get('marketplace') === 'all' ? [] : [{ askId: `oswiki-0x${'ab'.repeat(32)}`, contract: { address: COLLECTION }, tokenId: '9', price: { amount: { decimal: 1 } } }];
     });
     const { text } = await previewListing(h.ctx, listArgs('0.0456'));
-    expect(text).toMatch(/floor 0\.048 ETH/);
+    expect(flat(text)).toMatch(/floor 0\.048 ETH/);
     expect(text).not.toMatch(/differ by more than/);
     await expect(previewListing(h.ctx, listArgs('0.02'))).rejects.toThrow(/below 50% of the floor \(0\.048 ETH\)/);
     expect(marketplaces.length).toBeGreaterThan(0);
@@ -315,7 +318,7 @@ describe('M3: floor guard', () => {
     await expect(previewAcceptOffer(h.ctx, { chainId: 1, bidId, tokenId: '1' })).rejects.toThrow(/payout from this offer of 0\.94 ETH is below 50% of the floor/);
     h.api.routes.set(`GET /v1/collections/${COLLECTION}`, () => ({ address: COLLECTION, stats: { floorPrice: null } }));
     await expect(previewAcceptOffer(h.ctx, { chainId: 1, bidId, tokenId: '1' })).rejects.toThrow(/No floor reference/);
-    expect((await previewAcceptOffer(h.ctx, { chainId: 1, bidId, tokenId: '1', allowNoFloor: true })).text).toMatch(/allowNoFloor was set/);
+    expect(flat((await previewAcceptOffer(h.ctx, { chainId: 1, bidId, tokenId: '1', allowNoFloor: true })).text)).toMatch(/check was skipped because you allowed it/);
   });
 });
 
@@ -351,7 +354,7 @@ describe('L1: WETH approval size', () => {
     setupOffer(h, [bid(1, (3n * ETH / 10n).toString()), bid(2, (3n * ETH / 10n).toString())]);
     const { plan, text } = await previewOffer(h.ctx, { chainId: 1, contract: COLLECTION, price: '0.4', quantity: 3 });
     expect(plan.requiredAllowanceWei).toBe(18n * ETH / 10n);
-    expect(text).toContain('Approve exactly 1.8 WETH');
+    expect(text).toMatch(/\nApprove \(1 transaction\) +1\.8 WETH\n/);
   });
 
   it('caps at balance + this offer, and falls back to the current allowance when offers cannot be loaded', async () => {
@@ -366,7 +369,7 @@ describe('L1: WETH approval size', () => {
     setupOffer(down, null);
     const { plan, text } = await previewOffer(down.ctx, { chainId: 1, contract: COLLECTION, price: '0.4' });
     expect(plan.requiredAllowanceWei).toBe(5n * ETH / 10n);
-    expect(text).toContain('your open offers could not be loaded');
+    expect(flat(text)).toContain('your open offers could not be loaded');
   });
 
   it('boundedAllowance', () => {

@@ -315,3 +315,8 @@ export function confirmIdOf(text: string): string {
   if (!match) throw new Error(`no confirmId in: ${text}`);
   return match[1]!;
 }
+
+/** Card text with its line wrapping undone, for substring checks. */
+export function flat(text: string): string {
+  return text.replace(/\s+/g, ' ');
+}
