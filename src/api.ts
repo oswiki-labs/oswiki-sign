@@ -191,8 +191,11 @@ export class ApiClient {
     return this.batch(await this.request('POST', '/v1/orders/bids/bulk', undefined, { chainId, offers }, true));
   }
 
-  async buyData(chainId: number, askId: string): Promise<unknown> {
-    return this.request('POST', `/v1/listings/${encodeURIComponent(askId)}/buy-data`, undefined, { chainId });
+  /** OpenSea fills are authorized for the buyer, so the wallet always goes along; maxPriceWei makes the server refuse a dearer order. */
+  async buyData(chainId: number, askId: string, buyer: string, maxPriceWei?: bigint): Promise<unknown> {
+    const body: Record<string, unknown> = { chainId, buyer };
+    if (maxPriceWei !== undefined) body.maxPriceWei = maxPriceWei.toString();
+    return this.request('POST', `/v1/listings/${encodeURIComponent(askId)}/buy-data`, undefined, body);
   }
 
   async listing(chainId: number, askId: string): Promise<{ contract: string; tokenId: string; maker: string; status: string | null }> {

@@ -3,17 +3,25 @@ import { decodeFunctionResult, type Address, type Hex } from 'viem';
 import { encodeFulfillAdvancedOrder, encodeFulfillAvailableAdvancedOrders, FULFILL_AVAILABLE_ADVANCED_ORDERS_ABI, type SeaportAdvancedOrder } from '../abi.js';
 import { networkFee, sendGuardedTx } from '../chain.js';
 import { NATIVE_SYMBOL, SEAPORT_ADDRESS, type SupportedChainId } from '../constants.js';
+import { ApiError } from '../api.js';
 import { native } from '../format.js';
-import { assertOswikiSeaportOrder, fulfilledOrderHashes, orderHashFromAskId, revertMessage } from '../seaport/fulfill.js';
+import { assertOswikiSeaportOrder, fulfilledOrderHashes, orderHashFromAskId, OswikiOrderGuardError, revertMessage } from '../seaport/fulfill.js';
 import { readSeaportCounter } from '../seaport/listing.js';
+import { assertOpenSeaSeaportOrder } from '../seaport/opensea-buy.js';
 import { hashOrderComponents } from '../seaport/sign.js';
 import { checkBuyCollection, PRICE_OVER_FLOOR_FACTOR, type CollectionCheck } from './collection-check.js';
-import { assertBuyingEnabled, assertCollectionAllowed, assertMaxBuy, chainOf, GuardError, me, ORDER_ID_RE, type Ctx } from './common.js';
+import { assertBuyingEnabled, assertCollectionAllowed, assertMaxBuy, chainOf, GuardError, me, type Ctx } from './common.js';
 
 export const MAX_BUY_ITEMS = 20;
+export const BUY_ASK_ID_RE = /^(?:oswiki-)?0x[0-9a-fA-F]{64}$/;
+
+export type BuyMarketplace = 'oswiki' | 'opensea';
+
+const MARKETPLACE_NAME: Record<BuyMarketplace, string> = { oswiki: 'OSWiki', opensea: 'OpenSea' };
 
 export interface BuyEntry {
   askId: string;
+  marketplace: BuyMarketplace;
   orderHash: Hex;
   contract: Address;
   tokenId: string;
@@ -33,10 +41,33 @@ interface LoadedOrder extends BuyEntry {
   order: SeaportAdvancedOrder;
 }
 
+function marketplaceOf(askId: string): BuyMarketplace {
+  return askId.startsWith('oswiki-') ? 'oswiki' : 'opensea';
+}
+
+async function fetchBuyData(ctx: Ctx, chainId: SupportedChainId, askId: string, maxPriceWei?: bigint): Promise<[Record<string, unknown>, Awaited<ReturnType<Ctx['api']['listing']>>]> {
+  try {
+    const [data, meta] = await Promise.all([ctx.api.buyData(chainId, askId, me(ctx), maxPriceWei), ctx.api.listing(chainId, askId)]);
+    return [(data ?? {}) as Record<string, unknown>, meta];
+  } catch (err) {
+    if (err instanceof ApiError && err.code) throw new GuardError(`${askId} cannot be bought: ${err.message}. Nothing was sent.`);
+    throw err;
+  }
+}
+
 /** Fresh buy data per ask, guarded, and its struct hash under the seller's live counter must equal the askId. */
-async function loadOrder(ctx: Ctx, chainId: SupportedChainId, askId: string): Promise<LoadedOrder> {
-  const [data, meta] = await Promise.all([ctx.api.buyData(chainId, askId), ctx.api.listing(chainId, askId)]);
-  const guarded = assertOswikiSeaportOrder((data ?? {}) as Record<string, unknown>, { contract: meta.contract || null, tokenId: meta.tokenId || null });
+async function loadOrder(ctx: Ctx, chainId: SupportedChainId, askId: string, maxPriceWei?: bigint): Promise<LoadedOrder> {
+  const marketplace = marketplaceOf(askId);
+  const [data, meta] = await fetchBuyData(ctx, chainId, askId, maxPriceWei);
+  let guarded: { order: SeaportAdvancedOrder; value: bigint };
+  if (marketplace === 'opensea') {
+    if (!meta.contract || !meta.tokenId || meta.contract === 'invalid' || meta.tokenId === 'invalid') throw new GuardError(`The OSWiki API did not say which NFT ${askId} sells. Nothing was sent.`);
+    guarded = assertOpenSeaSeaportOrder(data, { contract: meta.contract, tokenId: meta.tokenId, wallet: me(ctx), nowSeconds: BigInt(Math.floor(ctx.now() / 1000)) });
+  } else {
+    if (data.marketplace !== undefined && data.marketplace !== 'oswiki') throw new OswikiOrderGuardError('not served as an OSWiki listing');
+    guarded = assertOswikiSeaportOrder(data, { contract: meta.contract || null, tokenId: meta.tokenId || null });
+    if (typeof data.data === 'string' && data.data.toLowerCase() !== encodeFulfillAdvancedOrder(guarded.order, me(ctx))) throw new OswikiOrderGuardError('the server calldata does not match the order');
+  }
   const params = guarded.order.parameters;
   const offerer = params.offerer;
   if (offerer === me(ctx)) throw new GuardError(`${askId} is this wallet's own listing.`);
@@ -47,6 +78,7 @@ async function loadOrder(ctx: Ctx, chainId: SupportedChainId, askId: string): Pr
   const item = params.offer[0]!;
   return {
     askId,
+    marketplace,
     orderHash,
     contract: item.token,
     tokenId: item.identifierOrCriteria.toString(),
@@ -80,10 +112,13 @@ async function simulateBuy(ctx: Ctx, chainId: SupportedChainId, loaded: LoadedOr
 export async function previewBuy(ctx: Ctx, input: { chainId: number; askIds: string[] }): Promise<{ text: string; plan: BuyPlan }> {
   const chainId = chainOf(input.chainId);
   assertBuyingEnabled(ctx.config, chainId);
-  const askIds = [...new Set(input.askIds ?? [])];
+  const raw = input.askIds ?? [];
+  const bad = raw.filter(id => typeof id !== 'string' || !BUY_ASK_ID_RE.test(id));
+  if (bad.length > 0) throw new GuardError(`Only OSWiki listings (askId "oswiki-0x...") and OpenSea listings (askId "0x" + 64 hex) can be bought here: ${bad.map(String).join(', ').slice(0, 200)}.`);
+  const askIds = [...new Set(raw.map(id => id.toLowerCase()))];
   if (askIds.length === 0 || askIds.length > MAX_BUY_ITEMS) throw new GuardError(`Buy 1 to ${MAX_BUY_ITEMS} listings at once.`);
-  const bad = askIds.filter(id => !ORDER_ID_RE.test(id));
-  if (bad.length > 0) throw new GuardError(`Only OSWiki listings (askId "oswiki-0x...") can be bought here: ${bad.join(', ').slice(0, 200)}.`);
+  const hashes = askIds.map(orderHashFromAskId);
+  if (new Set(hashes).size !== hashes.length) throw new GuardError('The same order is listed twice. Nothing was sent.');
 
   const loaded = await Promise.all(askIds.map(askId => loadOrder(ctx, chainId, askId)));
   for (const entry of loaded) assertCollectionAllowed(ctx.config, entry.contract);
@@ -111,11 +146,12 @@ export async function previewBuy(ctx: Ctx, input: { chainId: number; askIds: str
     entries: loaded.map(({ order: _order, ...entry }) => entry),
     totalValue: total,
   };
+  const markets = (['oswiki', 'opensea'] as const).filter(market => loaded.some(entry => entry.marketplace === market)).map(market => MARKETPLACE_NAME[market]).join(' + ');
   const text = [
-    `PREVIEW: buy ${loaded.length} OSWiki listing${loaded.length === 1 ? '' : 's'} on ${chainId === 1 ? 'Ethereum' : 'ApeChain'} for ${me(ctx)}.`,
+    `PREVIEW: buy ${loaded.length} ${markets} listing${loaded.length === 1 ? '' : 's'} on ${chainId === 1 ? 'Ethereum' : 'ApeChain'} for ${me(ctx)}.`,
     ...loaded.flatMap((entry) => {
       const check = checkOf.get(entry.contract)!;
-      const line = `- ${entry.askId}: ${check.name} ${entry.contract} #${entry.tokenId}${entry.quantity > 1n ? ` x${entry.quantity}` : ''} for ${native(entry.value, chainId)}`;
+      const line = `- ${entry.askId}: ${check.name} ${entry.contract} #${entry.tokenId}${entry.quantity > 1n ? ` x${entry.quantity}` : ''} for ${native(entry.value, chainId)} on ${MARKETPLACE_NAME[entry.marketplace]}`;
       const unitWei = entry.value / (entry.quantity > 0n ? entry.quantity : 1n);
       return check.floorWei !== null && unitWei > check.floorWei * PRICE_OVER_FLOOR_FACTOR
         ? [line, `  WARNING: this costs more than ${PRICE_OVER_FLOOR_FACTOR}x the collection floor (${native(check.floorWei, chainId)}). Double-check it with the user.`]
@@ -132,10 +168,10 @@ export async function previewBuy(ctx: Ctx, input: { chainId: number; askIds: str
 export async function executeBuy(ctx: Ctx, plan: BuyPlan, commit: () => void): Promise<string> {
   const { chainId } = plan;
   if (plan.wallet !== me(ctx)) throw new GuardError('This plan was made for another wallet.');
-  const loaded = await Promise.all(plan.entries.map(entry => loadOrder(ctx, chainId, entry.askId)));
+  const loaded = await Promise.all(plan.entries.map(entry => loadOrder(ctx, chainId, entry.askId, entry.value)));
   loaded.forEach((entry, i) => {
     const planned = plan.entries[i]!;
-    if (entry.orderHash !== planned.orderHash || entry.value !== planned.value || entry.contract !== planned.contract || entry.tokenId !== planned.tokenId) {
+    if (entry.orderHash !== planned.orderHash || entry.value !== planned.value || entry.contract !== planned.contract || entry.tokenId !== planned.tokenId || entry.quantity !== planned.quantity || entry.marketplace !== planned.marketplace) {
       throw new GuardError(`${entry.askId} changed since the preview. Run the preview again.`);
     }
     assertCollectionAllowed(ctx.config, entry.contract);

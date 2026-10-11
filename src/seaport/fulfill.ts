@@ -37,8 +37,8 @@ function smallUint(value: unknown, fallback: bigint): bigint | null {
   return null;
 }
 
-/** Strict read of the OSWiki contract shape {parameters, signature, numerator, denominator, extraData}. */
-function readAdvancedOrder(raw: unknown, fail: (reason: string) => never): SeaportAdvancedOrder {
+/** Strict read of the AdvancedOrder shape {parameters, signature, numerator, denominator, extraData} the API serves for every marketplace. */
+export function readAdvancedOrder(raw: unknown, fail: (reason: string) => never): SeaportAdvancedOrder {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return fail('unreadable order data');
   const data = raw as Record<string, unknown>;
   const params = data.parameters as Record<string, unknown> | undefined;
