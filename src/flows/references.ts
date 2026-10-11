@@ -166,6 +166,18 @@ export function checkListingPrice(refs: CollectionReferences, input: { chainId: 
   return { references: parts.join(' · '), warnings };
 }
 
+/** Value given up below the floor per unit; without a floor the whole price counts. */
+export function belowFloor(floorWei: bigint | null, priceWei: bigint): bigint {
+  if (floorWei === null) return priceWei;
+  return floorWei > priceWei ? floorWei - priceWei : 0n;
+}
+
+export function belowFloorLabel(floorWei: bigint | null, belowWei: bigint, chainId: SupportedChainId): string {
+  return floorWei === null
+    ? `No floor: the full ${native(belowWei, chainId)} counts toward today's below-floor budget.`
+    : `${native(belowWei, chainId)} below the floor, counted toward today's below-floor budget.`;
+}
+
 export class FloorGuardError extends Error {
   constructor(message: string) {
     super(message);

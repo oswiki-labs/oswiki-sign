@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -41,6 +41,12 @@ export const OTHER_SELLER = '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266' as Addr
 export const ROYALTY_RECIPIENT = '0x000000000000000000000000000000000000dead';
 export const MAINNET_FEE_RECIPIENT = '0x3a1d5441892ea68e7b0dc79ed849a0f5db0b1504';
 export const ETH = 10n ** 18n;
+
+export function testKeyFile(key: string = TEST_KEY): string {
+  const path = join(mkdtempSync(join(tmpdir(), 'oswiki-key-')), 'key');
+  writeFileSync(path, `${key}\n`, { mode: 0o600 });
+  return path;
+}
 
 const SEAPORT_CALLS_ABI = [...FULFILL_ADVANCED_ORDER_ABI, ...FULFILL_AVAILABLE_ADVANCED_ORDERS_ABI, ...FULFILL_BASIC_ORDER_ABI, ...MATCH_ADVANCED_ORDERS_ABI, ...SEAPORT_CANCEL_ABI, ...SEAPORT_GET_COUNTER_ABI];
 
@@ -280,7 +286,7 @@ export interface Harness {
 
 export function harness(options: { env?: Record<string, string>; logsFor?: LogsFor; now?: number } = {}): Harness {
   const env: NodeJS.ProcessEnv = {
-    OSWIKI_WALLET_KEY: TEST_KEY,
+    OSWIKI_WALLET_KEY_FILE: testKeyFile(),
     OSWIKI_SIGN_STATE_DIR: mkdtempSync(join(tmpdir(), 'oswiki-sign-')),
     OSWIKI_MAX_BUY_ETH: '1000',
     OSWIKI_MAX_BUY_APE: '100000',

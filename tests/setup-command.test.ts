@@ -331,7 +331,7 @@ describe('setup: Claude Code', () => {
     const originalSettings = JSON.stringify({ model: 'x', permissions: { allow: ['Bash(ls)'], deny: ['Read(./.env)', DENY_RULES[0]] } });
     writeFileSync(settingsPath, originalSettings);
 
-    const h = harness(['', '', '0.5', '500', '', '', '', '', '', '1', '', ''], { path: bin });
+    const h = harness(['', '', '0.5', '500', '', '', '', '', '', '1', ''], { path: bin });
     expect(await runSetup([], h.deps)).toBe(0);
 
     const keyFile = keyFilePath(homedir());
@@ -360,11 +360,25 @@ describe('setup: Claude Code', () => {
     expect(settings.model).toBe('x');
     expect(settings.permissions.allow).toEqual(['Bash(ls)']);
     expect(settings.permissions.deny).toEqual(['Read(./.env)', ...DENY_RULES]);
+    expect(h.output()).toContain(`Hardening: added ${DENY_RULES.length - 1} deny rules to ${settingsPath} (backup ${settingsPath}.bak-2026-10-11T12-00-00-000Z)`);
+    expect(h.questions.some(question => /deny rules/i.test(question))).toBe(false);
   });
 
-  it('prints the exact command when claude is not installed', async () => {
-    const h = harness(['', '', '', '', '', '', '', '', '', '1', 'n']);
+  it('adds the deny rules by default even when claude is not installed', async () => {
+    const h = harness(['', '', '', '', '', '', '', '', '', '1']);
     expect(await runSetup([], h.deps)).toBe(0);
+    const settings = JSON.parse(readFileSync(homeFile('.claude', 'settings.json'), 'utf8')) as { permissions: { deny: string[] } };
+    expect(settings.permissions.deny).toEqual(DENY_RULES);
+    expect(h.output()).toContain(`Hardening: added ${DENY_RULES.length} deny rules to ${homeFile('.claude', 'settings.json')} (they stop`);
+    const again = harness(['', '', '', '', '', '', '', '', '1']);
+    expect(await runSetup([], again.deps)).toBe(0);
+    expect(again.output()).toContain('Hardening: deny rules already in');
+  });
+
+  it('prints the exact command when claude is not installed and skips hardening with --no-hardening', async () => {
+    const h = harness(['', '', '', '', '', '', '', '', '', '1']);
+    expect(await runSetup(['--no-hardening'], h.deps)).toBe(0);
+    expect(h.output()).toContain('Hardening skipped (--no-hardening)');
     expect(h.exec.mock.calls.filter(([file]) => !file.endsWith('icacls.exe'))).toEqual([]);
     expect(h.output()).toContain('claude not found. Run this yourself:');
     expect(h.output()).toContain(`claude mcp add --scope user oswiki-sign -e`);
@@ -454,6 +468,43 @@ describe('setup: collections', () => {
     expect(out).toContain('OSWiki API unreachable: enter 0x addresses instead.');
     expect(out).toContain('OSWiki API unreachable: using the addresses as typed.');
     expect(out).toContain(`"OSWIKI_ALLOWED_COLLECTIONS": "${BLOCKED}"`);
+  });
+});
+
+describe('setup: other clients and old configs', () => {
+  it('prints hardening advice for Cursor and Claude Desktop instead of writing deny rules', async () => {
+    const cursor = harness(['', '', '', '', '', '', '', '', '', '2', '']);
+    expect(await runSetup([], cursor.deps)).toBe(0);
+    expect(cursor.output()).toMatch(/Cursor: keep the agent away from .*\.oswiki-sign and ~\/\.cursor\/mcp\.json/);
+    expect(cursor.output()).toContain('no auto-run');
+    const desktop = harness(['', '', '', '', '', '', '', '', '3', '']);
+    expect(await runSetup([], desktop.deps)).toBe(0);
+    expect(desktop.output()).toContain('Claude Desktop: do not give it a filesystem or shell extension');
+    expect(existsSync(homeFile('.claude', 'settings.json'))).toBe(false);
+  });
+
+  it('rejects unknown setup arguments', async () => {
+    const h = harness([]);
+    expect(await runSetup(['--no-hardening', '--yolo'], h.deps)).toBe(1);
+    expect(h.output()).toContain('Unknown argument for setup.');
+  });
+
+  it('names configs that still hold the key inline, tells how to move it and never prints it', async () => {
+    const cursorPath = homeFile('.cursor', 'mcp.json');
+    mkdirSync(join(homedir(), '.cursor'), { recursive: true });
+    writeFileSync(cursorPath, JSON.stringify({ mcpServers: { 'oswiki-sign': { command: 'npx', env: { OSWIKI_WALLET_KEY: TEST_KEY } } } }));
+    writeFileSync(homeFile('.claude.json'), JSON.stringify({ mcpServers: { 'oswiki-sign': { command: 'npx', env: { OSWIKI_WALLET_KEY_FILE: '/k' } } } }));
+    const h = harness(['', '', '', '', '', '', '', '', '', '2', '']);
+    expect(await runSetup([], h.deps)).toBe(0);
+    const out = h.output();
+    expect(out).toContain(`holds the private key inline (OSWIKI_WALLET_KEY) in: ${cursorPath}.`);
+    expect(out).not.toContain(homeFile('.claude.json'));
+    expect(out).toContain('choose "Import key"');
+    expect(out).toContain('*.bak-*');
+    expectNoKey(out, TEST_KEY);
+    const written = JSON.parse(readFileSync(cursorPath, 'utf8')) as { mcpServers: Record<string, { env: Record<string, string> }> };
+    expect(written.mcpServers['oswiki-sign']!.env.OSWIKI_WALLET_KEY).toBeUndefined();
+    expect(written.mcpServers['oswiki-sign']!.env.OSWIKI_WALLET_KEY_FILE).toBe(keyFilePath(homedir()));
   });
 });
 

@@ -18,7 +18,7 @@ import { createToolHandler, NO_HUMAN_CONFIRMER, serverInstructions, toolDefiniti
 import { SettingsStore } from '../src/settings.js';
 import { TradeState } from '../src/state.js';
 import { ENS_ADDR_COIN_ABI, ENS_REGISTRY_ABI, ENS_REGISTRY_ADDRESS, ENS_RESOLVER_ABI, ERC1155_TRANSFER_ABI, ERC721_SAFE_TRANSFER_ABI, NFT_TRANSFER_ABI, WRAPPED_TRANSFER_ABI } from '../src/transfer-abi.js';
-import { confirmIdOf, ETH, mockApi, RevertError, TEST_ADDRESS, TEST_KEY } from './helpers.js';
+import { confirmIdOf, ETH, mockApi, RevertError, TEST_ADDRESS, TEST_KEY, testKeyFile } from './helpers.js';
 
 const NFT721 = '0x790b2cf29ed4f310bf7641f013c65d4560d28371' as Address;
 const NFT1155 = '0x1111111111111111111111111111111111111155' as Address;
@@ -185,7 +185,7 @@ function ensApi(world: World | 'down') {
 
 function setup(options: { env?: Record<string, string>; confirmer?: HumanConfirmer; ensApi?: World | 'down'; receiptTimeoutMs?: number } = {}) {
   const env: NodeJS.ProcessEnv = {
-    OSWIKI_WALLET_KEY: TEST_KEY,
+    OSWIKI_WALLET_KEY_FILE: testKeyFile(),
     OSWIKI_SIGN_STATE_DIR: mkdtempSync(join(tmpdir(), 'oswiki-sign-transfer-')),
     OSWIKI_MAX_BUY_ETH: '1000',
     OSWIKI_MAX_BUY_APE: '100000',

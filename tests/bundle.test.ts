@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { TEST_KEY } from './helpers.js';
+import { TEST_KEY, testKeyFile } from './helpers.js';
 
 const packageDir = resolve(import.meta.dirname, '..');
 const { version } = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as { version: string };
@@ -55,15 +55,23 @@ describe('bundled dist/index.js without node_modules', () => {
   it('exits with the setup message when no key is configured', () => {
     const run = spawnSync(process.execPath, [entry], { cwd: installDir, env: isolatedEnv(), encoding: 'utf8', timeout: 20_000 });
     expect(run.status).toBe(1);
-    expect(run.stderr).toContain('OSWIKI_WALLET_KEY');
+    expect(run.stderr).toContain('OSWIKI_WALLET_KEY_FILE');
     expect(run.stderr).not.toContain('could not start');
     expect(run.stdout).toBe('');
+  });
+
+  it('refuses an inline key without echoing it', () => {
+    const run = spawnSync(process.execPath, [entry], { cwd: installDir, env: isolatedEnv({ OSWIKI_WALLET_KEY: TEST_KEY }), encoding: 'utf8', timeout: 20_000 });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('no longer accepts the private key inline');
+    expect(run.stderr).toContain('OSWIKI_WALLET_KEY_FILE');
+    expect(run.stderr.toLowerCase()).not.toContain(TEST_KEY.slice(2, 30).toLowerCase());
   });
 
   it('answers an MCP handshake and lists the trading tools', async () => {
     const child = spawn(process.execPath, [entry], {
       cwd: installDir,
-      env: isolatedEnv({ OSWIKI_WALLET_KEY: TEST_KEY, OSWIKI_DRY_RUN: '1' }),
+      env: isolatedEnv({ OSWIKI_WALLET_KEY_FILE: testKeyFile(), OSWIKI_DRY_RUN: '1' }),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const tools = await new Promise<string[]>((resolveTools, reject) => {

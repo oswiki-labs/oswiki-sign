@@ -1,16 +1,18 @@
+import { homedir } from 'node:os';
+
 import { formatUnits } from 'viem';
 
 import { WRAPPED_NATIVE_ABI } from '../abi.js';
 import type { Config, ConfirmMode } from '../config.js';
 import { APECHAIN_ID, MAINNET_ID, NATIVE_SYMBOL, SUPPORTED_CHAINS, WRAPPED_NATIVE, type SupportedChainId } from '../constants.js';
 import { CONFIRM_OFF_WARNING, native, wrapped } from '../format.js';
-import { PACKAGE_NAME } from '../setup.js';
+import { DENY_RULES, missingDenyRules, PACKAGE_NAME } from '../setup.js';
 import { VERSION } from '../version.js';
 import { chainOf, type Ctx } from './common.js';
 
 const CHAIN_NAME: Record<SupportedChainId, string> = { [MAINNET_ID]: 'Ethereum', [APECHAIN_ID]: 'ApeChain' };
 
-export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overrides?: Record<string, string>; settingsWarning?: string | null } = {}): Promise<string> {
+export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overrides?: Record<string, string>; settingsWarning?: string | null; claudeCode?: boolean; home?: string } = {}): Promise<string> {
   const address = ctx.account.address;
   const balances = await Promise.all(SUPPORTED_CHAINS.map(async (chainId) => {
     const client = ctx.chains.client(chainId);
@@ -40,17 +42,32 @@ export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overri
       ? `- ${CHAIN_NAME[chainId]} fund sending: off (set a daily send limit to enable, ${variable})`
       : `- sent today (native + wrapped) on ${CHAIN_NAME[chainId]}: ${native(ctx.state.sentToday(chainId), chainId)} of ${native(value, chainId)} used (${variable})`;
   };
+  const selling = (chainId: SupportedChainId) => {
+    const symbol = NATIVE_SYMBOL[chainId];
+    const below = config.dailyMaxBelowFloorWei[chainId];
+    const sell = config.dailyMaxSellWei[chainId];
+    const belowText = below === 0n
+      ? `below the floor: off (OSWIKI_DAILY_MAX_BELOW_FLOOR_${symbol} is 0)`
+      : `given up below the floor ${native(ctx.state.belowFloorToday(chainId), chainId)} of ${native(below, chainId)} used (OSWIKI_DAILY_MAX_BELOW_FLOOR_${symbol})`;
+    const sellText = sell === null
+      ? `value sold: no daily cap (OSWIKI_DAILY_MAX_SELL_${symbol})`
+      : `value sold ${native(ctx.state.soldToday(chainId), chainId)} of ${native(sell, chainId)} used (OSWIKI_DAILY_MAX_SELL_${symbol})`;
+    return `- listings and accepted offers today on ${CHAIN_NAME[chainId]}: ${belowText}; ${sellText}`;
+  };
   const pending = ctx.state.pendingTxs();
   return [
     `Wallet ${address.toLowerCase()}`,
     ...balances,
     config.confirmMode === 'off' ? CONFIRM_OFF_WARNING : '',
+    config.confirmMode === 'off' && options.claudeCode ? denyRulesWarning(options.home ?? homedir()) : '',
     'Limits:',
     `- max per buy/offer: ${cap(MAINNET_ID)} on Ethereum (OSWIKI_MAX_BUY_ETH), ${cap(APECHAIN_ID)} on ApeChain (OSWIKI_MAX_BUY_${NATIVE_SYMBOL[APECHAIN_ID]})`,
     `- listings and accepted offers must be at least ${config.minListFloorPct}% of the floor (OSWIKI_MIN_LIST_FLOOR_PCT)`,
     `- trades today: ${ctx.state.tradesToday()} of ${config.maxTradesPerDay} (OSWIKI_MAX_TRADES_PER_DAY; each item counts)`,
     `- cancels today: ${ctx.state.cancelsToday()} of ${config.maxCancelsPerDay} (OSWIKI_MAX_CANCELS_PER_DAY)`,
     `- spent today on buys and new offers: ${daily(MAINNET_ID)} on Ethereum (OSWIKI_DAILY_MAX_ETH), ${daily(APECHAIN_ID)} on ApeChain (OSWIKI_DAILY_MAX_APE)`,
+    selling(MAINNET_ID),
+    selling(APECHAIN_ID),
     sent(MAINNET_ID),
     sent(APECHAIN_ID),
     '- sending NFTs works without a send limit; every send always needs the dialog and every sent NFT counts as a trade',
@@ -64,6 +81,12 @@ export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overri
     options.settingsWarning ?? '',
     ...settingsHelp(config, new Set(Object.keys(options.overrides ?? {}))),
   ].filter(Boolean).join('\n');
+}
+
+function denyRulesWarning(home: string): string {
+  const missing = missingDenyRules(home);
+  if (missing === null || missing.length === 0) return '';
+  return `WARNING: confirmation is off and ${missing.length} of the ${DENY_RULES.length} oswiki-sign deny rules are missing from ~/.claude/settings.json, so the agent could read the key file or change its own limits. Run \`npx -y ${PACKAGE_NAME}@${VERSION} setup\` again in your own terminal (it adds them) or see the README, Claude Code hardening.`;
 }
 
 function collectionsLine(config: Config): string {
@@ -85,6 +108,10 @@ export function settingValues(config: Config): Array<[string, string]> {
     ['OSWIKI_DAILY_MAX_APE', amount(config.dailyMaxWei[APECHAIN_ID], 'no daily cap')],
     ['OSWIKI_DAILY_MAX_SEND_ETH', amount(config.dailyMaxSendWei[MAINNET_ID], 'fund sending off on Ethereum')],
     ['OSWIKI_DAILY_MAX_SEND_APE', amount(config.dailyMaxSendWei[APECHAIN_ID], 'fund sending off on ApeChain')],
+    ['OSWIKI_DAILY_MAX_SELL_ETH', amount(config.dailyMaxSellWei[MAINNET_ID], 'no daily sell cap')],
+    ['OSWIKI_DAILY_MAX_SELL_APE', amount(config.dailyMaxSellWei[APECHAIN_ID], 'no daily sell cap')],
+    ['OSWIKI_DAILY_MAX_BELOW_FLOOR_ETH', formatUnits(config.dailyMaxBelowFloorWei[MAINNET_ID], 18)],
+    ['OSWIKI_DAILY_MAX_BELOW_FLOOR_APE', formatUnits(config.dailyMaxBelowFloorWei[APECHAIN_ID], 18)],
     ['OSWIKI_MIN_LIST_FLOOR_PCT', String(config.minListFloorPct)],
     ['OSWIKI_MAX_TRADES_PER_DAY', String(config.maxTradesPerDay)],
     ['OSWIKI_MAX_CANCELS_PER_DAY', String(config.maxCancelsPerDay)],

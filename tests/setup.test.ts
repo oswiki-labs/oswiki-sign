@@ -6,10 +6,10 @@ import { describe, expect, it } from 'vitest';
 
 import { loadConfig, SetupError } from '../src/config.js';
 import { ConfirmStore, CONFIRM_TTL_MS } from '../src/confirm.js';
-import { createScrubber, loadWallet, SETUP_MESSAGE } from '../src/secret.js';
+import { createScrubber, INLINE_KEY_MESSAGE, loadWallet, SETUP_MESSAGE } from '../src/secret.js';
 import { SERVER_INSTRUCTIONS, serverInstructions, toolDefinitions } from '../src/server.js';
 import { TradeState } from '../src/state.js';
-import { TEST_ADDRESS, TEST_KEY } from './helpers.js';
+import { TEST_ADDRESS, TEST_KEY, testKeyFile } from './helpers.js';
 
 describe('key loading', () => {
   it('refuses to start without a key, with the setup message', () => {
@@ -20,7 +20,7 @@ describe('key loading', () => {
   it('never echoes an invalid key', () => {
     const bad = `${TEST_KEY}ff`;
     try {
-      loadWallet({ OSWIKI_WALLET_KEY: bad });
+      loadWallet({ OSWIKI_WALLET_KEY_FILE: testKeyFile(bad) });
       expect.unreachable();
     } catch (err) {
       expect((err as Error).message).not.toContain(bad.slice(2, 40));
@@ -28,14 +28,29 @@ describe('key loading', () => {
   });
 
   it('reads the key once and removes it from the environment', () => {
-    const env: NodeJS.ProcessEnv = { OSWIKI_WALLET_KEY: TEST_KEY.slice(2) };
+    const env: NodeJS.ProcessEnv = { OSWIKI_WALLET_KEY_FILE: testKeyFile(TEST_KEY.slice(2)) };
     const wallet = loadWallet(env);
     expect(wallet.account.address.toLowerCase()).toBe(TEST_ADDRESS);
+    expect(env.OSWIKI_WALLET_KEY_FILE).toBeUndefined();
+  });
+
+  it('refuses an inline key, removes it from the environment and points to the key file', () => {
+    const env: NodeJS.ProcessEnv = { OSWIKI_WALLET_KEY: TEST_KEY };
+    try {
+      loadWallet(env);
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(SetupError);
+      expect((err as Error).message).toBe(INLINE_KEY_MESSAGE);
+      expect((err as Error).message).toMatch(/OSWIKI_WALLET_KEY_FILE/);
+      expect((err as Error).message).toMatch(/setup/);
+      expect((err as Error).message.toLowerCase()).not.toContain(TEST_KEY.slice(2, 30));
+    }
     expect(env.OSWIKI_WALLET_KEY).toBeUndefined();
   });
 
   it('scrubs the key in any case, with or without 0x, inside longer hex', () => {
-    const { scrub } = loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY });
+    const { scrub } = loadWallet({ OSWIKI_WALLET_KEY_FILE: testKeyFile() });
     const raw = TEST_KEY.slice(2);
     expect(scrub(`a ${TEST_KEY} b`)).toBe('a 0x[redacted] b');
     expect(scrub(raw.toUpperCase())).toBe('[redacted]');

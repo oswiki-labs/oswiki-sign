@@ -4,15 +4,22 @@ import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 
 import { SetupError } from './config.js';
+import { VERSION } from './version.js';
 
 const KEY_RE = /^(?:0x)?[0-9a-fA-F]{64}$/;
 const HEX_RUN_RE = /[0-9a-fA-F]{64,}/g;
 const MAX_KEY_FILE_BYTES = 1024;
 
 export const SETUP_MESSAGE = [
-  'oswiki-sign needs a private key: OSWIKI_WALLET_KEY_FILE (path to a file that holds the key, preferred) or OSWIKI_WALLET_KEY (0x followed by 64 hex characters).',
-  'Set it in the "env" block of your MCP client config for oswiki-sign. Use a separate trading wallet that only holds what you are willing to trade.',
+  'oswiki-sign needs a key file: set OSWIKI_WALLET_KEY_FILE to the path of a file that holds the private key (0x followed by 64 hex characters).',
+  `The easiest way is to run \`npx -y @oswikixyz/sign@${VERSION} setup\` in a terminal. Use a separate trading wallet that only holds what you are willing to trade.`,
   'Never paste the key into a chat: the AI must never see it.',
+].join('\n');
+
+export const INLINE_KEY_MESSAGE = [
+  'oswiki-sign no longer accepts the private key inline in OSWIKI_WALLET_KEY: in the MCP config and the process environment it is readable in plain text. Nothing was started.',
+  `Move it to a key file: run \`npx -y @oswikixyz/sign@${VERSION} setup\` in a terminal and choose "Import key" (it stores the key in ~/.oswiki-sign/key and writes a config with only the file path),`,
+  'or save the key in a file yourself (README, Manual setup), set OSWIKI_WALLET_KEY_FILE to its path and delete OSWIKI_WALLET_KEY from the config. Then restart the AI client.',
 ].join('\n');
 
 function fingerprint(hex64: string): string {
@@ -74,13 +81,11 @@ export function loadWallet(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = p
   const file = env.OSWIKI_WALLET_KEY_FILE;
   delete env.OSWIKI_WALLET_KEY;
   delete env.OSWIKI_WALLET_KEY_FILE;
-  const hasInline = inline !== undefined && inline.trim() !== '';
-  const hasFile = file !== undefined && file.trim() !== '';
-  if (hasInline && hasFile) throw new SetupError('Set only one of OSWIKI_WALLET_KEY and OSWIKI_WALLET_KEY_FILE.');
-  if (!hasInline && !hasFile) throw new SetupError(SETUP_MESSAGE);
+  if (inline !== undefined && inline.trim() !== '') throw new SetupError(INLINE_KEY_MESSAGE);
+  if (file === undefined || file.trim() === '') throw new SetupError(SETUP_MESSAGE);
 
-  const source = hasFile ? 'OSWIKI_WALLET_KEY_FILE' : 'OSWIKI_WALLET_KEY';
-  const { raw, warnings } = hasFile ? readKeyFile(file.trim(), platform) : { raw: inline!, warnings: [] };
+  const source = 'OSWIKI_WALLET_KEY_FILE';
+  const { raw, warnings } = readKeyFile(file.trim(), platform);
   const trimmed = raw.trim();
   if (!KEY_RE.test(trimmed)) {
     throw new SetupError(`${source} does not hold a valid private key: it must be 0x followed by 64 hex characters.`);

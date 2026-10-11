@@ -18,10 +18,11 @@ import { myListings, myOffers, walletStatus } from './flows/status.js';
 import { TradeStoppedError } from './flows/tx-steps.js';
 import { executeTransfer, executeUnwrap, NO_DIALOG_SEND, previewTransfer, previewUnwrap, SendStoppedError, transferCharge, type TransferPlan, type UnwrapPlan } from './flows/transfer.js';
 import { CONFIRM_FOOTER, CONFIRM_OFF_FOOTER, CONFIRM_OFF_RULE } from './format.js';
-import { addCardWarning, type CardPreview } from './format-card.js';
+import { addCardText, addCardWarning, chainLabel, type CardPreview } from './format-card.js';
 import type { Scrubber } from './secret.js';
+import { isClaudeCode } from './setup.js';
 import type { SettingsStore } from './settings.js';
-import type { Charge, Limits } from './state.js';
+import { sellBudgetText, type Charge, type Limits } from './state.js';
 import { VERSION } from './version.js';
 
 export type Plan = ListingPlan | BuyPlan | CancelPlan | OfferPlan | AcceptPlan | TransferPlan | UnwrapPlan;
@@ -124,6 +125,10 @@ const SCHEMAS = {
     dailyMaxApe: amount.optional().describe('Most all buys and new offers may spend per UTC day on ApeChain, in APE'),
     dailyMaxSendEth: amount.optional().describe('Most ETH + WETH that may be sent to other wallets per UTC day on Ethereum'),
     dailyMaxSendApe: amount.optional().describe('Most APE + WAPE that may be sent to other wallets per UTC day on ApeChain'),
+    dailyMaxSellEth: amount.optional().describe('Most ETH of value that listings and accepted offers may sell per UTC day on Ethereum'),
+    dailyMaxSellApe: amount.optional().describe('Most APE of value that listings and accepted offers may sell per UTC day on ApeChain'),
+    dailyMaxBelowFloorEth: amount.optional().describe('Most ETH per UTC day that listings and accepted offers may give up below the floor on Ethereum (floor minus price per item; 0 = never below the floor)'),
+    dailyMaxBelowFloorApe: amount.optional().describe('Most APE per UTC day that listings and accepted offers may give up below the floor on ApeChain (floor minus price per item; 0 = never below the floor)'),
     minListFloorPct: z.number().int().min(0).max(100).optional().describe('Refuse listings and accepted offers below this % of the floor (0 = off)'),
     maxTradesPerDay: z.number().int().min(0).max(100000).optional(),
     maxCancelsPerDay: z.number().int().min(0).max(100000).optional(),
@@ -232,16 +237,23 @@ export function errorText(err: unknown): string {
 }
 
 export function limitsOf(config: Config): Limits {
-  return { maxTrades: config.maxTradesPerDay, maxCancels: config.maxCancelsPerDay, dailyMaxWei: config.dailyMaxWei, dailySendWei: config.dailyMaxSendWei };
+  return {
+    maxTrades: config.maxTradesPerDay,
+    maxCancels: config.maxCancelsPerDay,
+    dailyMaxWei: config.dailyMaxWei,
+    dailySendWei: config.dailyMaxSendWei,
+    dailySellWei: config.dailyMaxSellWei,
+    dailyBelowFloorWei: config.dailyMaxBelowFloorWei,
+  };
 }
 
 /** Every item of an execute counts: listed tokens, bought listings, offers, accepted offers, cancelled orders, sent NFTs. */
 export function chargeOf(plan: Plan): Charge {
   switch (plan.kind) {
-    case 'listing': return { chainId: plan.chainId, trades: plan.items.length, cancels: plan.cancels.filter(target => !target.twinOf).length };
+    case 'listing': return { chainId: plan.chainId, trades: plan.items.length, cancels: plan.cancels.filter(target => !target.twinOf).length, sellWei: plan.sellWei, belowFloorWei: plan.belowFloorWei };
     case 'buy': return { chainId: plan.chainId, trades: plan.entries.length, spendWei: plan.totalValue };
     case 'offer': return { chainId: plan.chainId, trades: plan.quantity, spendWei: plan.amountWei * BigInt(plan.quantity) };
-    case 'accept': return { chainId: plan.chainId, trades: 1 };
+    case 'accept': return { chainId: plan.chainId, trades: 1, sellWei: plan.offerWei, belowFloorWei: plan.belowFloorWei };
     case 'cancel': return { chainId: plan.chainId, cancels: cancelCount(plan) };
     case 'transfer': return transferCharge(plan);
     case 'unwrap': return { chainId: plan.chainId };
@@ -256,9 +268,10 @@ export interface ToolHandler {
   confirmer: HumanConfirmer;
   readonly confirmMode: ConfirmMode;
   onConfigChange?: () => void;
+  clientName?: () => string | undefined;
 }
 
-export function createToolHandler(ctx: Ctx, scrub: Scrubber, options: { store?: ConfirmStore<Plan>; confirmer?: HumanConfirmer; settings?: SettingsStore } = {}): ToolHandler {
+export function createToolHandler(ctx: Ctx, scrub: Scrubber, options: { store?: ConfirmStore<Plan>; confirmer?: HumanConfirmer; settings?: SettingsStore; home?: string } = {}): ToolHandler {
   const settings = options.settings ?? null;
   const store = options.store ?? new ConfirmStore<Plan>(ctx.now);
   let queue: Promise<unknown> = Promise.resolve();
@@ -287,7 +300,14 @@ export function createToolHandler(ctx: Ctx, scrub: Scrubber, options: { store?: 
   const withConfirm = async (preview: Promise<CardPreview<Plan>>): Promise<string> => {
     const { text, plan, note = [] } = await preview;
     const notice = cardNotice(plan);
-    const card = notice ? addCardWarning(text, notice) : text;
+    let card = notice ? addCardWarning(text, notice) : text;
+    if (plan.kind === 'listing' || plan.kind === 'accept') {
+      const { chainId, sellWei, belowFloorWei } = chargeOf(plan);
+      const sell: Charge = { chainId, sellWei, belowFloorWei };
+      const limits = limitsOf(ctx.config);
+      ctx.state.check(sell, limits);
+      card = addCardText(card, `Today on ${chainLabel(chainId)} after this: ${sellBudgetText(ctx.state.usage(), limits, chainId, sell)}.`);
+    }
     const confirmId = store.create(plan, card);
     const dry = ctx.config.dryRun ? 'DRY RUN is on (OSWIKI_DRY_RUN=1): execute will only report, nothing is signed or sent.' : '';
     const trailer = plan.kind === 'transfer'
@@ -353,7 +373,7 @@ export function createToolHandler(ctx: Ctx, scrub: Scrubber, options: { store?: 
 
   const run = async (name: ToolName, args: never): Promise<string> => {
     switch (name) {
-      case 'wallet_status': return walletStatus(ctx, { dialog: handler.confirmer.available(), overrides: settings?.overrides, settingsWarning: settings?.warning });
+      case 'wallet_status': return walletStatus(ctx, { dialog: handler.confirmer.available(), overrides: settings?.overrides, settingsWarning: settings?.warning, claudeCode: isClaudeCode(handler.clientName?.()), home: options.home });
       case 'my_listings': return myListings(ctx, args);
       case 'my_offers': return myOffers(ctx, args);
       case 'preview_listing': return withConfirm(previewListing(ctx, args));
@@ -409,6 +429,7 @@ export function toolDefinitions(mode: ConfirmMode = 'human') {
 export function createSignServer(handler: ToolHandler): Server {
   const server = new Server({ name: 'oswiki-sign', version: VERSION }, { capabilities: { tools: { listChanged: true } }, instructions: serverInstructions(handler.confirmMode) });
   handler.confirmer = elicitationConfirmer(server);
+  handler.clientName = () => server.getClientVersion()?.name;
   handler.onConfigChange = () => {
     server.sendToolListChanged().catch(() => undefined);
   };

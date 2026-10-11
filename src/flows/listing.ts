@@ -41,7 +41,7 @@ import {
   unacceptedIndexes,
   type Ctx,
 } from './common.js';
-import { applyMinFloor, checkListingPrice, fetchCollectionReferences, type CollectionReferences } from './references.js';
+import { applyMinFloor, belowFloor, belowFloorLabel, checkListingPrice, fetchCollectionReferences, type CollectionReferences } from './references.js';
 import { afterSends, txStep } from './tx-steps.js';
 
 export interface ListingInput {
@@ -64,6 +64,8 @@ export interface ListingPlan {
   orders: OrderComponents[];
   twins: Array<OrderComponents | null>;
   twinRoyalties: TwinRoyalty[];
+  sellWei: bigint;
+  belowFloorWei: bigint;
 }
 
 const DEFAULT_DURATION_DAYS = 30;
@@ -182,6 +184,7 @@ export async function previewListing(ctx: Ctx, input: ListingInput): Promise<Car
   const card = new Card(items.length === 1 ? 'listing' : `listing of ${items.length} items`, chainId);
   let totalSeller = 0n;
   let totalListed = 0n;
+  let belowFloorWei = 0n;
   for (const [index, item] of items.entries()) {
     const requirement = requirementFor(requirements, item.contract, item.tokenId);
     if (requirement.blocked || blocked.includes(item.contract)) throw new GuardError(`${item.contract} only trades through OpenSea's own zone and cannot be listed on OSWiki. Nothing was signed.`);
@@ -240,6 +243,9 @@ export async function previewListing(ctx: Ctx, input: ListingInput): Promise<Car
     card.text(`Reference: ${check.references}`, 2);
     for (const warning of check.warnings) card.warn(warning, 2);
     if (floorNote) card.warn(floorNote, 2);
+    const below = belowFloor(refs.floor.wei, item.unitPriceWei) * item.quantity;
+    belowFloorWei += below;
+    if (below > 0n) card.text(belowFloorLabel(refs.floor.wei, below, chainId), 2);
     aiNotes.push(`${item.contract} #${item.tokenId}: ${royalty.recipient ? `royalty ${native(royalty.wei, chainId)} to ${royalty.recipient}, ${royaltySourceLabel(royalty.source)}` : 'no royalty'}.`);
 
     let twin: OrderComponents | null = null;
@@ -297,7 +303,7 @@ export async function previewListing(ctx: Ctx, input: ListingInput): Promise<Car
   }
 
   const approvalsNeeded = contracts.filter((_, i) => !approvals[i]);
-  const plan: ListingPlan = { kind: 'listing', chainId, wallet: offerer, counter, items, approvals: approvalsNeeded, cancels, orders, twins, twinRoyalties };
+  const plan: ListingPlan = { kind: 'listing', chainId, wallet: offerer, counter, items, approvals: approvalsNeeded, cancels, orders, twins, twinRoyalties, sellWei: totalListed, belowFloorWei };
 
   card.rule();
   if (items.length > 1) card.row('Listed total', native(totalListed, chainId)).row('You receive in total', native(totalSeller, chainId));

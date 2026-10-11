@@ -36,8 +36,8 @@ const VERSION_RE = /^\d+\.\d+\.\d+$/;
 export const SETUP_HELP = `oswiki-sign setup - interactive setup of the local OSWiki trading signer
 
 Usage:
-  npx -y ${PACKAGE_NAME}@<version> setup
-  oswiki-sign setup
+  npx -y ${PACKAGE_NAME}@<version> setup [--no-hardening]
+  oswiki-sign setup [--no-hardening]
 
 Five short steps:
   1/5 Wallet        create a new trading wallet or import a key; stored in ~/.oswiki-sign/key, only you can read it
@@ -45,6 +45,9 @@ Five short steps:
   3/5 Collections   any, only these, or any except these
   4/5 Confirmation  approve each trade in oswiki-sign's dialog (recommended), or let the AI trade on its own
   5/5 Client        add to Claude Code, Cursor or Claude Desktop, or print the config
+
+For Claude Code, setup also adds deny rules to ~/.claude/settings.json (backed up first) so the agent
+cannot read the key or edit its own setup. --no-hardening skips that.
 
 The key is never printed unless you choose to back it up, and never written to a client config.
 Changed files are backed up first. Run setup again any time; it keeps your wallet unless you replace it.`;
@@ -611,11 +614,13 @@ async function addToJsonConfig(deps: SetupDeps, path: string, entry: ServerEntry
   return true;
 }
 
-async function hardenClaudeCode(deps: SetupDeps): Promise<void> {
+function hardenClaudeCode(deps: SetupDeps, enabled: boolean): void {
   const { io } = deps;
-  const path = join(deps.home, '.claude', 'settings.json');
-  io.print('  Deny rules stop the agent from reading the key or editing its own setup.');
-  if (await askYesNo(io, 'Add deny rules to ~/.claude/settings.json?', true)) io.print(addDenyRules(deps, path));
+  if (!enabled) {
+    io.print('Hardening skipped (--no-hardening): add the Claude Code deny rules from the README by hand.');
+    return;
+  }
+  io.print(`Hardening: ${addDenyRules(deps, claudeSettingsPath(deps.home))} (they stop the agent from reading the key or editing its own setup; skip with --no-hardening)`);
   io.print('Also turn on /sandbox with ~/.oswiki-sign denied (README; on Windows use WSL2).');
 }
 
@@ -636,18 +641,80 @@ function addDenyRules(deps: SetupDeps, path: string): string {
   }
   const current = (deny as string[] | undefined) ?? [];
   const missing = DENY_RULES.filter(rule => !current.includes(rule));
-  if (missing.length === 0) return 'Deny rules already there.';
-  if (settings) backupFile(path, deps.now());
+  if (missing.length === 0) return `deny rules already in ${path}`;
+  const backup = settings ? backupFile(path, deps.now()) : null;
   writeJson(path, { ...(settings ?? {}), permissions: { ...((permissions as Json | undefined) ?? {}), deny: [...current, ...missing] } });
-  return `Added ${missing.length} deny rule${missing.length === 1 ? '' : 's'}.`;
+  return `added ${missing.length} deny rule${missing.length === 1 ? '' : 's'} to ${path}${backup ? ` (backup ${backup})` : ''}`;
 }
 
-async function flow(deps: SetupDeps): Promise<void> {
+export function claudeSettingsPath(home: string): string {
+  return join(home, '.claude', 'settings.json');
+}
+
+/** Read-only and best effort: null when the settings cannot be read or parsed. */
+export function missingDenyRules(home: string): string[] | null {
+  try {
+    const settings = readJsonObject(claudeSettingsPath(home), 'Claude Code settings');
+    const deny = (settings?.permissions as Json | undefined)?.deny;
+    const current = Array.isArray(deny) ? deny.filter((rule): rule is string => typeof rule === 'string') : [];
+    return DENY_RULES.filter(rule => !current.includes(rule));
+  } catch {
+    return null;
+  }
+}
+
+export function isClaudeCode(clientName: string | undefined): boolean {
+  return clientName !== undefined && /^claude[- ]?code$/i.test(clientName.trim());
+}
+
+const INLINE_KEY_HELP = [
+  'Move it to a key file: in step 1 choose "Import key" and paste the key at the hidden prompt (it is saved to ~/.oswiki-sign/key, readable only by you),',
+  'or write it to a file yourself (README, Manual setup) and set OSWIKI_WALLET_KEY_FILE to its path.',
+  'Setup then writes an entry that holds only the key file path. Afterwards delete OSWIKI_WALLET_KEY from any config left over and the *.bak-* backups of these files, which still hold the key.',
+].join(' ');
+
+/** Configs may still hold the key inline; only file names are reported, never the value. */
+export function inlineKeyConfigs(deps: Pick<SetupDeps, 'home' | 'platform' | 'env'>): string[] {
+  const candidates = [join(deps.home, '.claude.json'), cursorConfigPath(deps.home), claudeDesktopConfigPath(deps.platform, deps.home, deps.env)];
+  return candidates.filter((path) => {
+    try {
+      const servers = readJsonObject(path, path)?.mcpServers as Json | undefined;
+      const env = (servers?.[SERVER_NAME] as Json | undefined)?.env as Json | undefined;
+      return typeof env?.OSWIKI_WALLET_KEY === 'string' && env.OSWIKI_WALLET_KEY.trim() !== '';
+    } catch {
+      return false;
+    }
+  });
+}
+
+function hardeningAdvice(client: Client, keyDir: string): string[] {
+  if (client === 'cursor') {
+    return [
+      `Cursor: keep the agent away from ${keyDir} and ~/.cursor/mcp.json.`,
+      '  Do not let it run terminal commands without asking (no auto-run), keep its dotfile and external-file protection on, and review every edit outside your project.',
+    ];
+  }
+  if (client === 'claude-desktop') {
+    return [
+      `Claude Desktop: do not give it a filesystem or shell extension that can reach ${keyDir} or claude_desktop_config.json;`,
+      '  limit such extensions to the project folders you work in.',
+    ];
+  }
+  return [`Make sure the agent cannot read ${keyDir} or edit its MCP config.`];
+}
+
+async function flow(deps: SetupDeps, options: { hardening: boolean }): Promise<void> {
   const { io, color } = deps;
   const p = paint(color);
   const keyFile = keyFilePath(deps.home);
   io.print(p.bold(`oswiki-sign ${deps.version} setup`));
   io.print('Use a separate trading wallet, never your main wallet.');
+  const inline = inlineKeyConfigs(deps);
+  if (inline.length > 0) {
+    io.print('');
+    io.print(p.red(`Your existing config holds the private key inline (OSWIKI_WALLET_KEY) in: ${inline.join(', ')}.`));
+    io.print(`oswiki-sign ${deps.version} no longer starts with an inline key. ${INLINE_KEY_HELP}`);
+  }
 
   const wallet = await walletStep(deps, keyFile);
   const kept = await chatOverridesStep(deps, wallet);
@@ -669,8 +736,8 @@ async function flow(deps: SetupDeps): Promise<void> {
   else if (client === 'claude-desktop') configured = await addToJsonConfig(deps, claudeDesktopConfigPath(deps.platform, deps.home, deps.env), entry);
   else printConfig(io, deps, entry);
 
-  if (client === 'claude-code') await hardenClaudeCode(deps);
-  else io.print(`Make sure the agent cannot read ${dirname(keyFile)} or edit its MCP config.`);
+  if (client === 'claude-code') hardenClaudeCode(deps, options.hardening);
+  else for (const line of hardeningAdvice(client, dirname(keyFile))) io.print(line);
 
   const clientName = { 'claude-code': 'Claude Code', cursor: 'Cursor', 'claude-desktop': 'Claude Desktop', print: 'your AI client' }[client];
   const collections = limits.collections;
@@ -692,7 +759,8 @@ export async function runSetup(argv: string[], deps: SetupDeps): Promise<number>
     io.print(SETUP_HELP);
     return 0;
   }
-  if (argv.length > 0) {
+  const hardening = !argv.includes('--no-hardening');
+  if (argv.some(arg => arg !== '--no-hardening')) {
     io.print(`Unknown argument for setup.\n\n${SETUP_HELP}`);
     return 1;
   }
@@ -705,7 +773,7 @@ export async function runSetup(argv: string[], deps: SetupDeps): Promise<number>
     return 1;
   }
   try {
-    await flow(deps);
+    await flow(deps, { hardening });
     return 0;
   } catch (err) {
     if (err instanceof SetupCancelled || err instanceof SetupError) {

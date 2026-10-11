@@ -20,6 +20,8 @@ export interface Config {
   maxBuyWei: Record<SupportedChainId, bigint | null>;
   dailyMaxWei: Record<SupportedChainId, bigint | null>;
   dailyMaxSendWei: Record<SupportedChainId, bigint | null>;
+  dailyMaxSellWei: Record<SupportedChainId, bigint | null>;
+  dailyMaxBelowFloorWei: Record<SupportedChainId, bigint>;
   minListFloorPct: number;
   maxTradesPerDay: number;
   maxCancelsPerDay: number;
@@ -107,6 +109,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     [MAINNET_ID]: dailyMax(env.OSWIKI_DAILY_MAX_ETH, 'OSWIKI_DAILY_MAX_ETH', maxBuyWei[MAINNET_ID]),
     [APECHAIN_ID]: dailyMax(env.OSWIKI_DAILY_MAX_APE, 'OSWIKI_DAILY_MAX_APE', maxBuyWei[APECHAIN_ID]),
   };
+  const dailySell = (value: string | undefined, name: string, perTrade: bigint | null) => readCap(value, name) ?? (perTrade === null ? null : perTrade * 10n);
+  const belowFloor = (value: string | undefined, name: string, perTrade: bigint | null) => readCap(value, name) ?? perTrade ?? 0n;
 
   return {
     rpc: {
@@ -119,6 +123,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     dailyMaxSendWei: {
       [MAINNET_ID]: readCap(env.OSWIKI_DAILY_MAX_SEND_ETH, 'OSWIKI_DAILY_MAX_SEND_ETH'),
       [APECHAIN_ID]: readCap(env.OSWIKI_DAILY_MAX_SEND_APE, 'OSWIKI_DAILY_MAX_SEND_APE'),
+    },
+    dailyMaxSellWei: {
+      [MAINNET_ID]: dailySell(env.OSWIKI_DAILY_MAX_SELL_ETH, 'OSWIKI_DAILY_MAX_SELL_ETH', maxBuyWei[MAINNET_ID]),
+      [APECHAIN_ID]: dailySell(env.OSWIKI_DAILY_MAX_SELL_APE, 'OSWIKI_DAILY_MAX_SELL_APE', maxBuyWei[APECHAIN_ID]),
+    },
+    dailyMaxBelowFloorWei: {
+      [MAINNET_ID]: belowFloor(env.OSWIKI_DAILY_MAX_BELOW_FLOOR_ETH, 'OSWIKI_DAILY_MAX_BELOW_FLOOR_ETH', maxBuyWei[MAINNET_ID]),
+      [APECHAIN_ID]: belowFloor(env.OSWIKI_DAILY_MAX_BELOW_FLOOR_APE, 'OSWIKI_DAILY_MAX_BELOW_FLOOR_APE', maxBuyWei[APECHAIN_ID]),
     },
     minListFloorPct: readInt(env.OSWIKI_MIN_LIST_FLOOR_PCT, 50, 'OSWIKI_MIN_LIST_FLOOR_PCT', 0, 100),
     maxTradesPerDay: readInt(env.OSWIKI_MAX_TRADES_PER_DAY, 50, 'OSWIKI_MAX_TRADES_PER_DAY', 0, 100000),

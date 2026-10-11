@@ -155,10 +155,18 @@ export function warnLines(text: string, indent = 0): string[] {
 
 /** Adds a warning to a rendered card, above its closing rule and "Details:" line. */
 export function addCardWarning(card: string, warning: string): string {
+  return insertCardLines(card, warnLines(warning));
+}
+
+export function addCardText(card: string, text: string): string {
+  return insertCardLines(card, wrapText(text, CARD_WIDTH));
+}
+
+function insertCardLines(card: string, added: string[]): string {
   const lines = card.split('\n');
   const details = lines.findIndex(line => line.startsWith('Details: '));
   const at = details > 0 && lines[details - 1] === CARD_RULE ? details - 1 : lines.length;
-  lines.splice(at, 0, ...warnLines(warning));
+  lines.splice(at, 0, ...added);
   return lines.join('\n');
 }
 

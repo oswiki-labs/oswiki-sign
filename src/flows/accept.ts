@@ -9,7 +9,7 @@ import { readConduitApproval, readOnchainRoyalty, readSeaportCounter, royaltySou
 import { assertOswikiSeaportOffer, encodeOfferAccept, type GuardedOfferAccept } from '../seaport/offer.js';
 import { SEAPORT_ITEM_TYPE, type OfferKind } from '../seaport/order.js';
 import { ADDRESS_RE, assertCollectionAllowed, assertHolds, chainOf, GuardError, me, ORDER_ID_RE, probeConduit, setApprovalData, TOKEN_ID_RE, type Ctx } from './common.js';
-import { applyMinFloor, fetchFloor } from './references.js';
+import { applyMinFloor, belowFloor, belowFloorLabel, fetchFloor } from './references.js';
 import { afterSends, txStep } from './tx-steps.js';
 
 export interface AcceptPlan {
@@ -25,6 +25,7 @@ export interface AcceptPlan {
   offerWei: bigint;
   sellerNetWei: bigint;
   royaltyRecipient: Address | null;
+  belowFloorWei: bigint;
 }
 
 function royaltyLeg(guarded: GuardedOfferAccept, chainId: SupportedChainId): { recipient: Address | null; wei: bigint } {
@@ -100,6 +101,7 @@ export async function previewAcceptOffer(ctx: Ctx, input: { chainId: number; bid
     offerWei: guarded.amounts.offerWei,
     sellerNetWei: guarded.amounts.sellerNetWei,
     royaltyRecipient: royalty.recipient,
+    belowFloorWei: belowFloor(floor.wei, guarded.amounts.offerWei),
   };
   const name = info?.name || shortHex(guarded.contract);
   const { offerWei, feeWei, royaltyWei, sellerNetWei } = guarded.amounts;
@@ -118,6 +120,7 @@ export async function previewAcceptOffer(ctx: Ctx, input: { chainId: number; bid
   card.row('You receive', wrapped(sellerNetWei, chainId));
   if (floor.warning) card.warn(floor.warning, 2);
   if (floorNote) card.warn(floorNote, 2);
+  if (plan.belowFloorWei > 0n) card.text(belowFloorLabel(floor.wei, plan.belowFloorWei, chainId), 2);
   card.rule()
     .text(approved ? 'No approval needed.' : `First a one-time approval: let the OpenSea conduit move your ${name} (1 transaction, you pay gas).`)
     .text(approved ? '✓ Simulated just now: it goes through.' : 'The sale is simulated right before sending, after the approval.')

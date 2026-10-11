@@ -15,7 +15,7 @@ import { loadConfig } from '../src/config.js';
 import { OPENSEA_CONDUIT_ADDRESS, SEAPORT_ADDRESS, WRAPPED_NATIVE } from '../src/constants.js';
 import { hashOrderComponents } from '../src/seaport/sign.js';
 import { buildListingOrder, serializeOrderComponents } from '../src/seaport/order.js';
-import { loadWallet } from '../src/secret.js';
+import { INLINE_KEY_MESSAGE, loadWallet } from '../src/secret.js';
 import { CARD_TRAILER, chargeOf, CONFIRM_MODE_HELP, createSignServer, createToolHandler, elicitationConfirmer, NO_HUMAN_CONFIRMER, serverInstructions, toolDefinitions, type HumanConfirmer } from '../src/server.js';
 import { AI_MODE_WITH_DIALOG } from '../src/flows/limits.js';
 import { confirmLine } from '../src/flows/status.js';
@@ -23,7 +23,7 @@ import { SettingsStore } from '../src/settings.js';
 import { VERSION } from '../src/version.js';
 import { LOCK_STALE_MS, StateLockError, TradeState, type PendingTx } from '../src/state.js';
 import vectors from './fixtures/seaport-vectors.json' with { type: 'json' };
-import { cancelLogs, COLLECTION, confirmIdOf, ETH, fulfilledLog, harness, MAINNET_FEE_RECIPIENT, makeTransport, newChainState, OTHER_SELLER, TEST_ADDRESS, TEST_KEY, type Harness } from './helpers.js';
+import { cancelLogs, COLLECTION, confirmIdOf, ETH, fulfilledLog, harness, MAINNET_FEE_RECIPIENT, makeTransport, newChainState, OTHER_SELLER, TEST_ADDRESS, TEST_KEY, testKeyFile, type Harness } from './helpers.js';
 
 const NOW = Date.parse('2026-10-10T12:00:00Z');
 const vectorAskId = `oswiki-${vectors.orders.erc721.orderHash}`;
@@ -332,7 +332,7 @@ describe('update_limits', () => {
     h.handler.confirmer = dialog();
     await h.call('update_limits', { maxBuyEth: '2', confirmMode: 'off' });
     const file = join(h.ctx.config.stateDir, 'settings.json');
-    const again = SettingsStore.fromEnv({ OSWIKI_WALLET_KEY: TEST_KEY, OSWIKI_SIGN_STATE_DIR: h.ctx.config.stateDir, OSWIKI_MAX_BUY_ETH: '1000' }, loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY }).stateKey);
+    const again = SettingsStore.fromEnv({ OSWIKI_SIGN_STATE_DIR: h.ctx.config.stateDir, OSWIKI_MAX_BUY_ETH: '1000' }, loadWallet({ OSWIKI_WALLET_KEY_FILE: testKeyFile() }).stateKey);
     expect(again.load().maxBuyWei[1]).toBe(2n * ETH);
     expect(again.load().confirmMode).toBe('off');
     writeFileSync(file, readFileSync(file, 'utf8').replace('"2"', '"9000"'));
@@ -340,7 +340,7 @@ describe('update_limits', () => {
     expect(tampered.maxBuyWei[1]).toBe(1000n * ETH);
     expect(tampered.confirmMode).toBe('human');
     expect(again.warning).toMatch(/failed its integrity check/);
-    const otherWallet = SettingsStore.fromEnv({ OSWIKI_SIGN_STATE_DIR: h.ctx.config.stateDir }, loadWallet({ OSWIKI_WALLET_KEY: `0x${'11'.repeat(32)}` }).stateKey);
+    const otherWallet = SettingsStore.fromEnv({ OSWIKI_SIGN_STATE_DIR: h.ctx.config.stateDir }, loadWallet({ OSWIKI_WALLET_KEY_FILE: testKeyFile(`0x${'11'.repeat(32)}`) }).stateKey);
     h.handler.confirmer = dialog();
     await h.call('update_limits', { maxBuyEth: '3' });
     expect(otherWallet.load().maxBuyWei[1]).toBeNull();
@@ -517,7 +517,7 @@ describe('gas and fee caps (M1)', () => {
         return base({ chain: mainnet }).request(args as never);
       },
     });
-    const wallet = loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY });
+    const wallet = loadWallet({ OSWIKI_WALLET_KEY_FILE: testKeyFile() });
     const config = loadConfig(env);
     return { state, wallet, chains: createChains(config, wallet.account, { transportFor: () => transport, pollingInterval: 5, tracker }) };
   }
@@ -611,7 +611,7 @@ describe('pending transactions (L8)', () => {
     const store: PendingTx[] = [entry];
     const tracker: PendingTracker = { pendingTxs: () => store, addPending: () => undefined, removePending: (hash) => { store.splice(store.findIndex(item => item.hash === hash), 1); } };
     const answers: Record<string, unknown> = { eth_getTransactionReceipt: null, eth_getTransactionByHash: null, eth_getTransactionCount: '0x3' };
-    const wallet = loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY });
+    const wallet = loadWallet({ OSWIKI_WALLET_KEY_FILE: testKeyFile() });
     const transport = custom({ async request({ method }: { method: string }) { return answers[method] ?? null; } });
     const chains = createChains(loadConfig({}), wallet.account, { transportFor: () => transport, tracker });
     await expect(assertNoPendingTx(chains, wallet.account, 1, () => NOW)).rejects.toThrow(PendingTxError);
@@ -710,7 +710,7 @@ describe('key file (H4)', () => {
     expect(env.OSWIKI_WALLET_KEY_FILE).toBeUndefined();
     expect(wallet.warnings).toEqual([expect.stringMatching(/cannot check who may read the key file.*%USERPROFILE%/)]);
     expect(wallet.stateKey).toHaveLength(32);
-    expect(loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY }).stateKey.equals(wallet.stateKey)).toBe(true);
+    expect(loadWallet({ OSWIKI_WALLET_KEY_FILE: testKeyFile() }).stateKey.equals(wallet.stateKey)).toBe(true);
   });
 
   it('warns about a key file other users can read on POSIX', () => {
@@ -719,7 +719,7 @@ describe('key file (H4)', () => {
     expect(loadWallet({ OSWIKI_WALLET_KEY_FILE: path }, 'win32').warnings).toEqual([expect.stringMatching(/Windows/)]);  });
 
   it('refuses both sources, a missing file, a huge file and bad content without echoing it', () => {
-    expect(() => loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY, OSWIKI_WALLET_KEY_FILE: keyFile(TEST_KEY) })).toThrow(/only one/);
+    expect(() => loadWallet({ OSWIKI_WALLET_KEY: TEST_KEY, OSWIKI_WALLET_KEY_FILE: keyFile(TEST_KEY) })).toThrow(INLINE_KEY_MESSAGE);
     expect(() => loadWallet({ OSWIKI_WALLET_KEY_FILE: join(tmpdir(), 'oswiki-missing-key') })).toThrow(/could not be opened/);
     expect(() => loadWallet({ OSWIKI_WALLET_KEY_FILE: keyFile('a'.repeat(5000)) })).toThrow(/too large/);
     const bad = `${TEST_KEY}ff`;
