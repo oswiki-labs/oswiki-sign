@@ -15,11 +15,15 @@ import {
   DENY_RULES,
   keyFilePath,
   NEVER_PASTE,
+  removeLocalScopeEntries,
   box,
   useColor,
   runSetup,
+  selfTestServer,
   type Exec,
   type SetupDeps,
+  type Spawn,
+  type SpawnedServer,
 } from '../src/setup.js';
 import type { FetchLike } from '../src/api.js';
 import { loadWallet } from '../src/secret.js';
@@ -54,9 +58,32 @@ interface Harness {
   output: () => string;
   questions: string[];
   keys: Hex[];
+  spawn: ReturnType<typeof vi.fn<Spawn>>;
 }
 
-function harness(answers: string[], options: { sendLimits?: string[]; secrets?: string[]; platform?: NodeJS.Platform; path?: string; isTTY?: boolean; color?: boolean; fetch?: FetchLike } = {}): Harness {
+interface FakeServer extends SpawnedServer {
+  killed: number;
+}
+
+function fakeServer(script: { stderr?: string[]; exit?: boolean } = {}): FakeServer {
+  const server: FakeServer = {
+    killed: 0,
+    onStderr: (listener) => {
+      queueMicrotask(() => {
+        for (const chunk of script.stderr ?? []) listener(chunk);
+      });
+    },
+    onExit: (listener) => {
+      if (script.exit) setTimeout(listener, 0);
+    },
+    kill: () => {
+      server.killed++;
+    },
+  };
+  return server;
+}
+
+function harness(answers: string[], options: { recommended?: string; sendLimits?: string[]; secrets?: string[]; platform?: NodeJS.Platform; path?: string; isTTY?: boolean; color?: boolean; fetch?: FetchLike; server?: () => SpawnedServer; cwd?: string } = {}): Harness {
   const lines: string[] = [];
   const questions: string[] = [];
   const keys: Hex[] = [];
@@ -64,6 +91,7 @@ function harness(answers: string[], options: { sendLimits?: string[]; secrets?: 
   const queue = [...answers];
   const sendQueue = [...(options.sendLimits ?? [])];
   const exec = vi.fn<Exec>(() => '');
+  const spawn = vi.fn<Spawn>(options.server ?? (() => fakeServer({ exit: true })));
   const deps: SetupDeps = {
     io: {
       print: text => lines.push(text),
@@ -71,6 +99,7 @@ function harness(answers: string[], options: { sendLimits?: string[]; secrets?: 
         questions.push(question);
         lines.push(question);
         if (question.startsWith('Daily send limit')) return sendQueue.shift() ?? '';
+        if (question.startsWith('Use recommended limits?')) return options.recommended ?? 'n';
         const answer = queue.shift();
         if (answer === undefined) throw new Error(`unexpected question: ${question}`);
         return answer;
@@ -90,6 +119,9 @@ function harness(answers: string[], options: { sendLimits?: string[]; secrets?: 
     home: homedir(),
     version: VERSION,
     exec,
+    spawn,
+    cwd: options.cwd ?? root,
+    selfTestTimeoutMs: 200,
     now: () => new Date('2026-10-11T12:00:00.000Z'),
     generateKey: () => {
       const key = generatePrivateKey();
@@ -97,7 +129,7 @@ function harness(answers: string[], options: { sendLimits?: string[]; secrets?: 
       return key;
     },
   };
-  return { deps, exec, output: () => lines.join('\n'), questions, keys };
+  return { deps, exec, output: () => lines.join('\n'), questions, keys, spawn };
 }
 
 function expectNoKey(text: string, key: string): void {
@@ -138,14 +170,14 @@ describe('setup: create wallet', () => {
     expect(out).toContain(JSON.stringify(keyFile));
     expect(out).toContain('"OSWIKI_DRY_RUN": "0"');
     expect(out).toContain('"OSWIKI_MAX_BUY_ETH": "0.05"');
-    expect(out).toContain('"OSWIKI_MAX_BUY_APE": "50"');
+    expect(out).toContain('"OSWIKI_MAX_BUY_APE": "25"');
     expect(h.questions).toContain('Back up the private key now? (y/N) - if you lose the key file, the wallet is gone ');
-    expect(h.questions).toContain('Dry run (nothing is sent)? (y/N) ');
-    expect(h.questions).toContain('1) Any  2) Only these  3) Any except these [1]: ');
-    expect(h.questions).toContain('Your choice (y/N) ');
+    expect(h.questions).toContain('Test mode: show everything but never send? (y/N) ');
+    expect(h.questions).toContain('1) All  2) Only these  3) All except these [1]: ');
+    expect(h.questions).toContain('Trade on its own (y/N) ');
     expect(h.questions).toContain('1) Claude Code  2) Cursor  3) Claude Desktop  4) Print config [1]: ');
     for (const question of h.questions) expect(question.length, question).toBeLessThanOrEqual(90);
-    expect(out).toContain('No = you approve each trade in a dialog (recommended)');
+    expect(out).toContain('No  = a pop-up asks you before every trade (recommended)');
     expect(out).toContain('"OSWIKI_CONFIRM_MODE": "human"');
     expect(out).toMatch(/Done\. Wallet 0x[0-9a-fA-F]{4}\.\.\.[0-9a-fA-F]{4} · dry run off · dialog on · any collection/);
     expect(out).toContain('Never paste the private key into a chat.');
@@ -163,7 +195,7 @@ describe('setup: create wallet', () => {
     const off = harness(['', '', '', '', '', '', '', '', '', '4']);
     expect(await runSetup([], off.deps)).toBe(0);
     expect(off.output()).not.toContain('OSWIKI_DAILY_MAX_SEND');
-    expect(off.questions).toContain('Daily send limit, ETH + WETH (skip = off) [skip]: ');
+    expect(off.questions).toContain('Daily send limit, ETH + WETH (skip = no sending) [skip]: ');
   });
 
   it('writes a daily send limit when one is entered', async () => {
@@ -184,6 +216,17 @@ describe('setup: create wallet', () => {
     expect(out).toContain('"OSWIKI_DRY_RUN": "0"');
     expect(out).toContain('"OSWIKI_MIN_LIST_FLOOR_PCT": "0"');
     expect(out).toContain('"OSWIKI_CONFIRM_MODE": "off"');
+  });
+
+  it('takes the recommended limits in one answer and skips the individual questions', async () => {
+    const h = harness(['', '', '', '', '4'], { recommended: '' });
+    expect(await runSetup([], h.deps)).toBe(0);
+    const out = h.output();
+    expect(out).toContain('Recommended: max 0.05 ETH / 25 APE per buy, floor guard 50%, 50 trades/day, dry run off, sends off');
+    expect(h.questions).toContain('Use recommended limits? (Y/n) ');
+    expect(h.questions.some(question => question.startsWith('Most the AI may pay') || question.startsWith('Daily send limit'))).toBe(false);
+    for (const line of ['"OSWIKI_MAX_BUY_ETH": "0.05"', '"OSWIKI_MAX_BUY_APE": "25"', '"OSWIKI_MIN_LIST_FLOOR_PCT": "50"', '"OSWIKI_MAX_TRADES_PER_DAY": "50"', '"OSWIKI_DRY_RUN": "0"']) expect(out).toContain(line);
+    expect(out).not.toContain('OSWIKI_DAILY_MAX_SEND');
   });
 
   it('re-asks invalid limits', async () => {
@@ -285,7 +328,7 @@ describe('setup: client configs', () => {
         OSWIKI_WALLET_KEY_FILE: keyFilePath(homedir()),
         OSWIKI_DRY_RUN: '0',
         OSWIKI_MAX_BUY_ETH: '0.05',
-        OSWIKI_MAX_BUY_APE: '50',
+        OSWIKI_MAX_BUY_APE: '25',
         OSWIKI_MIN_LIST_FLOOR_PCT: '50',
         OSWIKI_MAX_TRADES_PER_DAY: '50',
         OSWIKI_CONFIRM_MODE: 'human',
@@ -360,7 +403,7 @@ describe('setup: Claude Code', () => {
     expect(settings.model).toBe('x');
     expect(settings.permissions.allow).toEqual(['Bash(ls)']);
     expect(settings.permissions.deny).toEqual(['Read(./.env)', ...DENY_RULES]);
-    expect(h.output()).toContain(`Hardening: added ${DENY_RULES.length - 1} deny rules to ${settingsPath} (backup ${settingsPath}.bak-2026-10-11T12-00-00-000Z)`);
+    expect(h.output()).toContain(`Protection: added ${DENY_RULES.length - 1} deny rules to ${settingsPath} (backup ${settingsPath}.bak-2026-10-11T12-00-00-000Z)`);
     expect(h.questions.some(question => /deny rules/i.test(question))).toBe(false);
   });
 
@@ -369,10 +412,10 @@ describe('setup: Claude Code', () => {
     expect(await runSetup([], h.deps)).toBe(0);
     const settings = JSON.parse(readFileSync(homeFile('.claude', 'settings.json'), 'utf8')) as { permissions: { deny: string[] } };
     expect(settings.permissions.deny).toEqual(DENY_RULES);
-    expect(h.output()).toContain(`Hardening: added ${DENY_RULES.length} deny rules to ${homeFile('.claude', 'settings.json')} (they stop`);
+    expect(h.output()).toContain(`Protection: added ${DENY_RULES.length} deny rules to ${homeFile('.claude', 'settings.json')} (Claude Code can no longer`);
     const again = harness(['', '', '', '', '', '', '', '', '1']);
     expect(await runSetup([], again.deps)).toBe(0);
-    expect(again.output()).toContain('Hardening: deny rules already in');
+    expect(again.output()).toContain('Protection: deny rules already in');
   });
 
   it('prints the exact command when claude is not installed and skips hardening with --no-hardening', async () => {
@@ -584,5 +627,220 @@ describe('hidden input', () => {
     await expect(pending).rejects.toThrow('Setup cancelled.');
     expect(tty.rawModes).toEqual([true, false]);
     expect(tty.written()).not.toContain('ab');
+  });
+});
+
+function fakeBin(names: string[], platform: NodeJS.Platform = process.platform): string {
+  const bin = join(root, 'bin');
+  mkdirSync(bin, { recursive: true });
+  for (const name of names) writeFileSync(join(bin, platform === 'win32' ? `${name}.exe` : name), '');
+  return bin;
+}
+
+const CLAUDE_CODE_ANSWERS = ['', '', '', '', '', '', '', '', '', '1', ''];
+
+describe('setup: folder entries that shadow the user-scope entry', () => {
+  function seedProjects(projects: Record<string, unknown>): string {
+    const path = homeFile('.claude.json');
+    writeFileSync(path, JSON.stringify({ numStartups: 3, projects }));
+    return path;
+  }
+
+  it('lists local-scope entries and removes them by editing ~/.claude.json after a backup, never running anything in those folders', async () => {
+    const bin = fakeBin(['claude']);
+    const a = join(root, 'proj-a');
+    const b = join(root, 'proj-b');
+    const gone = join(root, 'deleted-folder');
+    mkdirSync(a);
+    mkdirSync(b);
+    writeFileSync(join(a, process.platform === 'win32' ? 'node.bat' : 'node'), 'planted');
+    const path = seedProjects({
+      [a]: { mcpServers: { 'oswiki-sign': { command: 'npx', env: {} } } },
+      [b]: { mcpServers: { 'oswiki-sign': { command: 'npx' }, other: { command: 'x' } }, allowedTools: ['Read'] },
+      [gone]: { mcpServers: { 'oswiki-sign': {} } },
+      [join(root, 'clean')]: { mcpServers: { other: { command: 'x' } } },
+      [join(root, 'empty')]: {},
+    });
+    const original = readFileSync(path, 'utf8');
+    const h = harness([...CLAUDE_CODE_ANSWERS, ''], { path: bin });
+    expect(await runSetup([], h.deps)).toBe(0);
+
+    const out = h.output();
+    expect(out).toContain('is also set for single folders (local scope)');
+    expect(out).toContain(`  ${a}`);
+    expect(out).toContain(`  ${b}`);
+    expect(out).not.toContain(join(root, 'clean'));
+    expect(h.questions).toContain('Remove them? (Y/n) ');
+    expect(h.exec.mock.calls.filter(([, args]) => args.includes('local'))).toEqual([]);
+    for (const call of h.exec.mock.calls) expect(call[2] ?? {}).not.toHaveProperty('cwd');
+    const backup = `${path}.bak-2026-10-11T12-00-00-000Z`;
+    expect(out).toContain(`Removed 3 folder entries from ~/.claude.json (backup ${backup}).`);
+    expect(out).not.toContain('Could not remove these');
+    expect(readFileSync(backup, 'utf8')).toBe(original);
+    const json = JSON.parse(readFileSync(path, 'utf8')) as { numStartups: number; projects: Record<string, { mcpServers?: Record<string, unknown>; allowedTools?: string[] }> };
+    expect(json.numStartups).toBe(3);
+    expect(json.projects[a]!.mcpServers).toEqual({});
+    expect(json.projects[b]).toEqual({ mcpServers: { other: { command: 'x' } }, allowedTools: ['Read'] });
+    expect(json.projects[gone]!.mcpServers).toEqual({});
+    expect(json.projects[join(root, 'clean')]).toEqual({ mcpServers: { other: { command: 'x' } } });
+    expect(readdirSync(homedir()).filter(name => name.includes('.tmp-'))).toEqual([]);
+  });
+
+  it('removes them without the claude command too, and keeps them when the user declines', async () => {
+    const folder = join(root, 'my project');
+    const path = seedProjects({ [folder]: { mcpServers: { 'oswiki-sign': {} } } });
+    const declined = harness([...CLAUDE_CODE_ANSWERS.slice(0, -1), 'n']);
+    expect(await runSetup([], declined.deps)).toBe(0);
+    expect(declined.output()).toContain('Kept. To remove them later:');
+    expect(declined.output()).toContain('delete "oswiki-sign" under "projects"');
+    expect(JSON.parse(readFileSync(path, 'utf8')).projects[folder].mcpServers).toEqual({ 'oswiki-sign': {} });
+
+    const h = harness([...CLAUDE_CODE_ANSWERS.slice(0, -1), '']);
+    expect(await runSetup([], h.deps)).toBe(0);
+    expect(h.questions).toContain('Remove it? (Y/n) ');
+    expect(h.output()).toContain('Removed 1 folder entry from ~/.claude.json');
+    expect(JSON.parse(readFileSync(path, 'utf8')).projects[folder].mcpServers).toEqual({});
+  });
+
+  it('removeLocalScopeEntries only touches the named folders and re-reads the file to report what is left', () => {
+    const keep = join(root, 'keep');
+    const drop = join(root, 'drop');
+    const path = seedProjects({ [keep]: { mcpServers: { 'oswiki-sign': {} } }, [drop]: { mcpServers: { 'oswiki-sign': {} } } });
+    const result = removeLocalScopeEntries(homedir(), [drop], new Date('2026-10-11T12:00:00.000Z'));
+    expect(result.left).toEqual([]);
+    expect(result.backup).toBe(`${path}.bak-2026-10-11T12-00-00-000Z`);
+    const json = JSON.parse(readFileSync(path, 'utf8')) as { projects: Record<string, { mcpServers: Record<string, unknown> }> };
+    expect(json.projects[keep]!.mcpServers).toEqual({ 'oswiki-sign': {} });
+    expect(json.projects[drop]!.mcpServers).toEqual({});
+  });
+
+  it('refuses to rewrite an invalid ~/.claude.json', async () => {
+    const path = homeFile('.claude.json');
+    writeFileSync(path, '{ not json');
+    expect(() => removeLocalScopeEntries(homedir(), ['x'], new Date())).toThrow(/not valid JSON/);
+    expect(readFileSync(path, 'utf8')).toBe('{ not json');
+  });
+
+  it('warns about a .mcp.json in the current folder without editing it', async () => {
+    const cwd = join(root, 'repo');
+    mkdirSync(cwd);
+    const mcpJson = JSON.stringify({ mcpServers: { 'oswiki-sign': { command: 'npx' } } });
+    writeFileSync(join(cwd, '.mcp.json'), mcpJson);
+    const h = harness(CLAUDE_CODE_ANSWERS.slice(0, -1), { cwd });
+    expect(await runSetup([], h.deps)).toBe(0);
+    expect(h.output()).toContain(`${join(cwd, '.mcp.json')} also defines oswiki-sign (project scope)`);
+    expect(readFileSync(join(cwd, '.mcp.json'), 'utf8')).toBe(mcpJson);
+
+    const other = harness(['', '', '', '', '', '', '', '', '2', ''], { cwd });
+    expect(await runSetup([], other.deps)).toBe(0);
+    expect(other.output()).not.toContain('project scope');
+  });
+});
+
+describe('setup: self-test', () => {
+  const READY = (address: string) => `oswiki-sign ${VERSION} ready for ${address}\n`;
+  const DEAD = '0x000000000000000000000000000000000000dEaD';
+
+  it('starts the configured server once with its env, waits for the ready line and stops it', async () => {
+    const bin = fakeBin(['npx']);
+    let server: FakeServer | undefined;
+    const h: Harness = harness(['', '', '', '', '', '', '', '', '', '2', ''], {
+      path: bin,
+      server: () => {
+        server = fakeServer({ stderr: [`Warning: something\noswiki-sign ${VERSION} re`, `ady for ${privateKeyToAccount(h.keys[0]!).address}\n`] });
+        return server;
+      },
+    });
+    expect(await runSetup([], h.deps)).toBe(0);
+    expect(h.spawn).toHaveBeenCalledTimes(1);
+    const [file, args, options] = h.spawn.mock.calls[0]!;
+    expect(file).toBe(join(bin, process.platform === 'win32' ? 'npx.exe' : 'npx'));
+    expect(args).toEqual(['-y', PKG]);
+    expect(options.windowsVerbatimArguments).toBe(false);
+    expect(options.env.OSWIKI_WALLET_KEY_FILE).toBe(keyFilePath(homedir()));
+    expect(options.env.OSWIKI_CONFIRM_MODE).toBe('human');
+    expect(options.env.PATH).toBe(bin);
+    expect(server!.killed).toBe(1);
+    const out = h.output();
+    expect(out).toContain(`OK oswiki-sign ${VERSION} ready for ${privateKeyToAccount(h.keys[0]!).address}`);
+    expect(out).not.toContain('not the wallet set up here');
+    expect(out.indexOf('ready for')).toBeLessThan(out.indexOf('Done.'));
+  });
+
+  it('shows the last stderr lines with the key redacted when the server stops', async () => {
+    const bin = fakeBin(['npx']);
+    const h = harness(['', '', '', '', '', '', '', '', '', '3', ''], {
+      path: bin,
+      color: true,
+      server: () => fakeServer({ stderr: ['\u001b[31mnpm ERR! 404\u001b[0m\n', `oswiki-sign could not start. ${TEST_KEY.slice(2)}\n`], exit: true }),
+    });
+    expect(await runSetup([], h.deps)).toBe(0);
+    const out = h.output();
+    expect(out).toContain('✗ oswiki-sign did not start: it stopped');
+    expect(out).toContain('  npm ERR! 404');
+    expect(out).toContain('  oswiki-sign could not start. [redacted]');
+    expectNoKey(out, TEST_KEY);
+    expect(out).toContain('CONNECTION_CLOSED');
+  });
+
+  it('reports a timeout and still stops the server', async () => {
+    const bin = fakeBin(['npx']);
+    let server: FakeServer | undefined;
+    const h = harness(['', '', '', '', '', '', '', '', '', '2', ''], { path: bin, server: () => (server = fakeServer({ stderr: ['npm warn exec downloading\n'] })) });
+    h.deps.selfTestTimeoutMs = 30;
+    expect(await runSetup([], h.deps)).toBe(0);
+    expect(h.output()).toContain('FAILED oswiki-sign did not start: no ready line within 0s');
+    expect(h.output()).toContain('  npm warn exec downloading');
+    expect(h.output()).toContain('npx may still be downloading');
+    expect(server!.killed).toBe(1);
+  });
+
+  it('flags a different wallet than the one set up', async () => {
+    const bin = fakeBin(['npx']);
+    const h = harness(['', '', '', '', '', '', '', '', '', '2', ''], { path: bin, server: () => fakeServer({ stderr: [READY(DEAD)] }) });
+    expect(await runSetup([], h.deps)).toBe(0);
+    expect(h.output()).toContain(`ready for ${DEAD}`);
+    expect(h.output()).toContain('That is not the wallet set up here');
+  });
+
+  it('is skipped when nothing was written and says so when npx is missing', async () => {
+    const printed = harness(['', '', '', '', '', '', '', '', '', '4']);
+    expect(await runSetup([], printed.deps)).toBe(0);
+    expect(printed.spawn).not.toHaveBeenCalled();
+    expect(printed.output()).not.toContain('Checking that oswiki-sign starts');
+
+    const declined = harness(['', '', '', '', '', '', '', '', '2', 'n']);
+    expect(await runSetup([], declined.deps)).toBe(0);
+    expect(declined.spawn).not.toHaveBeenCalled();
+
+    const missing = harness(['', '', '', '', '', '', '', '', '2', '']);
+    expect(await runSetup([], missing.deps)).toBe(0);
+    expect(missing.spawn).not.toHaveBeenCalled();
+    expect(missing.output()).toContain('FAILED oswiki-sign did not start: npx not found in PATH');
+  });
+
+  it('runs an npx.cmd shim through cmd.exe with every argument quoted', async () => {
+    const bin = join(root, 'winbin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'npx.cmd'), '');
+    const npx = join(bin, 'npx.cmd');
+    const server = fakeServer({ stderr: [READY(DEAD)] });
+    const spawn = vi.fn<Spawn>(() => server);
+    const keyPath = 'C:\\Users\\a b\\.oswiki-sign\\key';
+    const result = await selfTestServer({ env: { PATH: bin, ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, platform: 'win32', version: VERSION, spawn }, { OSWIKI_WALLET_KEY_FILE: keyPath });
+    expect(result).toEqual({ ok: true, version: VERSION, address: DEAD });
+    expect(spawn).toHaveBeenCalledWith('C:\\Windows\\system32\\cmd.exe', ['/d', '/s', '/c', `""${npx}" "-y" "${PKG}""`], {
+      env: { PATH: bin, ComSpec: 'C:\\Windows\\system32\\cmd.exe', OSWIKI_WALLET_KEY_FILE: keyPath },
+      windowsVerbatimArguments: true,
+    });
+    expect(server.killed).toBe(1);
+  });
+
+  it('fails cleanly when the process cannot be spawned', async () => {
+    const bin = fakeBin(['npx']);
+    const spawn = vi.fn<Spawn>(() => {
+      throw new Error('EACCES');
+    });
+    expect(await selfTestServer({ env: { PATH: bin }, platform: process.platform, version: VERSION, spawn }, {})).toEqual({ ok: false, reason: 'spawn', output: '' });
   });
 });

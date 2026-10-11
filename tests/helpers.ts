@@ -23,6 +23,7 @@ import {
   SEAPORT_CANCEL_ABI,
   SEAPORT_EVENTS_ABI,
   SEAPORT_GET_COUNTER_ABI,
+  SEAPORT_GET_ORDER_STATUS_ABI,
   WRAPPED_NATIVE_ABI,
 } from '../src/abi.js';
 import { ApiClient } from '../src/api.js';
@@ -48,7 +49,7 @@ export function testKeyFile(key: string = TEST_KEY): string {
   return path;
 }
 
-const SEAPORT_CALLS_ABI = [...FULFILL_ADVANCED_ORDER_ABI, ...FULFILL_AVAILABLE_ADVANCED_ORDERS_ABI, ...FULFILL_BASIC_ORDER_ABI, ...MATCH_ADVANCED_ORDERS_ABI, ...SEAPORT_CANCEL_ABI, ...SEAPORT_GET_COUNTER_ABI];
+const SEAPORT_CALLS_ABI = [...FULFILL_ADVANCED_ORDER_ABI, ...FULFILL_AVAILABLE_ADVANCED_ORDERS_ABI, ...FULFILL_BASIC_ORDER_ABI, ...MATCH_ADVANCED_ORDERS_ABI, ...SEAPORT_CANCEL_ABI, ...SEAPORT_GET_COUNTER_ABI, ...SEAPORT_GET_ORDER_STATUS_ABI];
 
 export class RevertError extends Error {
   readonly data: Hex;
@@ -61,6 +62,7 @@ export class RevertError extends Error {
 export interface ChainState {
   counters: Map<string, bigint>;
   counterFails: boolean;
+  orderStatus: Map<string, { cancelled: boolean; filled: bigint; size: bigint }>;
   owners: Map<string, string>;
   balances1155: Map<string, bigint>;
   erc1155: Set<string>;
@@ -79,6 +81,7 @@ export function newChainState(): ChainState {
   return {
     counters: new Map(),
     counterFails: false,
+    orderStatus: new Map(),
     owners: new Map(),
     balances1155: new Map(),
     erc1155: new Set(),
@@ -200,6 +203,10 @@ function ethCall(state: ChainState, call: { to: string; data: Hex; from?: string
     if (decoded.functionName === 'getCounter') {
       if (state.counterFails) throw new Error('rpc down');
       return encodeFunctionResult({ abi: SEAPORT_GET_COUNTER_ABI, functionName: 'getCounter', result: state.counters.get((decoded.args[0] as string).toLowerCase()) ?? 0n });
+    }
+    if (decoded.functionName === 'getOrderStatus') {
+      const status = state.orderStatus.get((decoded.args[0] as string).toLowerCase()) ?? { cancelled: false, filled: 0n, size: 0n };
+      return encodeFunctionResult({ abi: SEAPORT_GET_ORDER_STATUS_ABI, functionName: 'getOrderStatus', result: [status.size > 0n, status.cancelled, status.filled, status.size] });
     }
     if (state.seaportRevert) throw new RevertError(state.seaportRevert);
     if (decoded.functionName === 'fulfillAvailableAdvancedOrders') {

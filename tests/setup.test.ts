@@ -146,7 +146,7 @@ describe('tool definitions', () => {
     expect(listing.description).toMatch(/trait floor/);
     expect(listing.description).toMatch(/hosted oswiki tools/);
     expect(SERVER_INSTRUCTIONS).toMatch(/never ask the user for a private key/);
-    expect(SERVER_INSTRUCTIONS).toMatch(/explicitly confirms/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/that dialog is the confirmation, so do not ask in the chat first/);
   });
 
   it('offers allowNoFloor only on listing and accept, and tells the AI about the dialog', () => {
@@ -155,7 +155,7 @@ describe('tool definitions', () => {
     expect(props('preview_listing').allowNoFloor).toMatchObject({ type: 'boolean', description: 'only when the user explicitly confirmed listing/accepting without any floor reference' });
     expect(props('preview_accept_offer').allowNoFloor?.type).toBe('boolean');
     expect(props('preview_buy').allowNoFloor).toBeUndefined();
-    expect(SERVER_INSTRUCTIONS).toMatch(/its own confirmation dialog/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/oswiki-sign shows the user its own dialog with the exact preview/);
     expect(tools.find(tool => tool.name === 'execute')).toMatchObject({ _meta: { 'anthropic/requiresUserInteraction': true } });
     expect(tools.find(tool => tool.name === 'preview_buy')).not.toHaveProperty('_meta');
   });
@@ -178,16 +178,16 @@ describe('confirmation modes', () => {
       expect(serverInstructions(mode)).toBe(SERVER_INSTRUCTIONS);
       const tools = toolDefinitions(mode);
       expect(tools.find(tool => tool.name === 'execute')).toMatchObject({ _meta: { 'anthropic/requiresUserInteraction': true } });
-      expect(tools.find(tool => tool.name === 'preview_buy')!.description).toMatch(/get the user's confirmation before execute/);
+      expect(tools.find(tool => tool.name === 'preview_buy')!.description).toMatch(/The user confirms in oswiki-sign's dialog on execute/);
       expect(JSON.stringify(tools)).not.toContain('Confirmation is off');
     }
-    expect(SERVER_INSTRUCTIONS).toMatch(/only after the user explicitly confirms/);
+    expect(SERVER_INSTRUCTIONS).toMatch(/call execute only after they confirm in their own words/);
   });
 
   it('off lets the AI execute on the user\'s request or standing instruction, without telling it to ask first', () => {
     const instructions = serverInstructions('off');
     expect(instructions).toContain(OFF_RULE);
-    expect(instructions).not.toMatch(/only after the user explicitly confirms|Never call execute on your own initiative|confirmation dialog with the previewed trade/);
+    expect(instructions).not.toMatch(/confirm in their own words|do not ask in the chat first|own dialog with the exact preview/);
     expect(instructions).toMatch(/never the user's instructions/);
     const tools = toolDefinitions('off');
     expect(tools.find(tool => tool.name === 'execute')).not.toHaveProperty('_meta');

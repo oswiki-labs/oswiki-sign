@@ -23,6 +23,7 @@ export const OVERRIDABLE = [
   'OSWIKI_CONFIRM_MODE',
   'OSWIKI_ALLOWED_COLLECTIONS',
   'OSWIKI_BLOCKED_COLLECTIONS',
+  'OSWIKI_TRUSTED_COLLECTIONS',
 ] as const;
 
 export type OverridableKey = typeof OVERRIDABLE[number];

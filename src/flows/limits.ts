@@ -33,6 +33,7 @@ export interface LimitsInput {
   confirmMode?: ConfirmMode;
   allowedCollections?: CollectionChange;
   blockedCollections?: Omit<CollectionChange, 'clear'>;
+  trustedCollections?: Omit<CollectionChange, 'clear'>;
 }
 
 export interface Approver {
@@ -42,7 +43,7 @@ export interface Approver {
 
 const CHAIN_NAME: Record<SupportedChainId, string> = { [MAINNET_ID]: 'Ethereum', [APECHAIN_ID]: 'ApeChain' };
 
-export const NO_DIALOG_SETTINGS = `Refused: changing settings from the chat needs the user's approval in oswiki-sign's own dialog, and this MCP client cannot show it. The user can run \`npx -y ${PACKAGE_NAME}@${VERSION} setup\` again in their own terminal (it keeps the wallet), then restart the AI client. Nothing was changed.`;
+export const NO_DIALOG_SETTINGS = `Refused: changing settings from the chat needs the user's approval in oswiki-sign's own dialog, and this MCP client cannot show it while the browser approval page is switched off (OSWIKI_BROWSER_APPROVAL=0). The user can run \`npx -y ${PACKAGE_NAME}@${VERSION} setup\` again in their own terminal (it keeps the wallet), then restart the AI client. Nothing was changed.`;
 
 function addresses(list: string[] | undefined, field: string): string[] {
   const values = (list ?? []).map(entry => entry.trim());
@@ -84,6 +85,7 @@ export function nextOverrides(current: Overrides, config: Config, input: LimitsI
   set('OSWIKI_CONFIRM_MODE', input.confirmMode);
   if (input.allowedCollections) set('OSWIKI_ALLOWED_COLLECTIONS', nextCollections(config.allowedCollections, input.allowedCollections, 'allowedCollections', true));
   if (input.blockedCollections) set('OSWIKI_BLOCKED_COLLECTIONS', nextCollections(config.blockedCollections, input.blockedCollections, 'blockedCollections', false));
+  if (input.trustedCollections) set('OSWIKI_TRUSTED_COLLECTIONS', nextCollections(config.trustedCollections, input.trustedCollections, 'trustedCollections', false));
   return next;
 }
 
@@ -102,7 +104,7 @@ export function settingsDiff(before: Config, after: Config): string[] {
 }
 
 async function collectionNames(ctx: Ctx, input: LimitsInput): Promise<string[]> {
-  const added = [...(input.allowedCollections?.add ?? []), ...(input.blockedCollections?.add ?? [])].filter(entry => ADDRESS_RE.test(entry)).slice(0, 20);
+  const added = [...(input.allowedCollections?.add ?? []), ...(input.blockedCollections?.add ?? []), ...(input.trustedCollections?.add ?? [])].filter(entry => ADDRESS_RE.test(entry)).slice(0, 20);
   const rows = await Promise.all(added.map(async (address) => {
     const found = await Promise.all(([MAINNET_ID, APECHAIN_ID] as const).map(chainId => ctx.api.collection(chainId, address).then(info => (info.name ? `${info.name} (${CHAIN_NAME[chainId]})` : null), () => null)));
     const names = found.filter(Boolean);
@@ -127,8 +129,7 @@ export async function updateLimits(ctx: Ctx, settings: SettingsStore, approver: 
 
   const names = await collectionNames(ctx, input);
   const message = [
-    'oswiki-sign (your local signer, not the AI) asks you to approve these setting changes:',
-    '',
+    'APPROVE SETTING CHANGES',
     ...diff,
     ...names,
     '',

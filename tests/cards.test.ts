@@ -7,7 +7,7 @@ import { UNVERIFIED_ROYALTY_LABEL } from '../src/seaport/listing.js';
 import { OPENSEA_SIGNED_ZONE } from '../src/seaport/opensea.js';
 import { buildListingOrder, buildOfferOrder, serializeOrderComponents } from '../src/seaport/order.js';
 import { hashOrderComponents } from '../src/seaport/sign.js';
-import { CARD_TRAILER, DIALOG_HEADER, type HumanConfirmer } from '../src/server.js';
+import { CARD_TRAILER, dialogHeadline, type HumanConfirmer } from '../src/server.js';
 import vectors from './fixtures/seaport-vectors.json' with { type: 'json' };
 import { COLLECTION, confirmIdOf, ETH, fulfilledLog, harness, listingRequirements, MAINNET_FEE_RECIPIENT, OTHER_SELLER, ROYALTY_RECIPIENT, TEST_ADDRESS, type Harness } from './helpers.js';
 
@@ -17,7 +17,7 @@ const flat = (text: string) => text.replace(/\s+/g, ' ');
 const cardOf = (text: string) => text.slice(0, text.indexOf(`\n\n${CARD_TRAILER}`));
 const detailsOf = (card: string) => flat(card.slice(card.indexOf('Details: ')));
 const print =(title: string, card: string) => {
-  if (process.env.PRINT_CARDS) process.stdout.write(`\n=== ${title} ===\n${card}\n`);
+  if (process.env.PRINT_CARDS) process.stdout.write(`\n=== ${title} ===\n${card}\n--- dialog message ---\n${dialogHeadline(card)}\n`);
 };
 
 function recorder(): HumanConfirmer & { asked: Array<{ message: string; title?: string }> } {
@@ -156,8 +156,9 @@ describe('approval cards', () => {
     expect(preview.text).toContain(askId);
 
     await h.call('execute', { confirmId: confirmIdOf(preview.text) });
-    expect(dialog.asked[0]!.message).toBe(`${DIALOG_HEADER}\n\n${card}`);
+    expect(dialog.asked[0]!.message).toBe(card);
     expect(dialog.asked[0]!.title).toBe('Buy for the total shown');
+    expect(dialogHeadline(card)).toBe('APPROVE PURCHASE · Ethereum · cannot be undone\nOtherdeed Expanded #1  1 ETH\nTotal  1 ETH');
   });
 
   it('listing: price, fee, royalty, payout, OpenSea twin, expiry, approval and the cancel of a cheaper listing', async () => {
@@ -186,6 +187,15 @@ describe('approval cards', () => {
     expect(detailsOf(card)).toBe('Details: Seaport 0x0000…b395 · counter 0 · conduit 0x1e00…3c71');
     expect(card).not.toMatch(/the user|confirmId/);
     expect(preview.text).toContain(`oswiki-${cheapHash}`);
+    expect(dialogHeadline(card).split('\n')).toEqual([
+      'APPROVE LISTING · Ethereum',
+      'Otherdeed Expanded #7  1.5 ETH',
+      'You receive  1.41 ETH',
+      'Also on OpenSea at  1.5 ETH',
+      'You receive there  1.41 ETH',
+      `⚠ Royalty ${UNVERIFIED_ROYALTY_LABEL}.`,
+      `⚠ Creator fee ${UNVERIFIED_ROYALTY_LABEL}.`,
+    ]);
   });
 
   it('offer: amount, what the seller gets, wrap and exact approval steps, expiry', async () => {
@@ -202,6 +212,13 @@ describe('approval cards', () => {
     expect(card).toMatch(/\nApprove \(1 transaction\) +1\.2 WETH\n {2}Seaport may spend exactly this/);
     expect(flat(card)).toContain('never unlimited');
     expect(card).toMatch(/\nExpires +in 7 days \(2026-10-17\)\n/);
+    expect(dialogHeadline(card).split('\n')).toEqual([
+      'APPROVE COLLECTION OFFER · Ethereum',
+      '3 × any Otherdeed Expanded  1.2 WETH',
+      'Each seller receives  0.376 WETH',
+      'First wrap (1 transaction)  0.7 ETH → WETH',
+      'Approve (1 transaction)  1.2 WETH',
+    ]);
   });
 
   it('accept: what you sell, offer, fees, royalty, what you receive', async () => {
@@ -217,6 +234,13 @@ describe('approval cards', () => {
     expect(card).toMatch(/\nOffer +1 WETH\n {2}OSWiki fee 1% +−0\.01 WETH\n {2}Royalty 5% → 0x0000…dead +−0\.05 WETH\n/);
     expect(card).toMatch(/\nYou receive +0\.94 WETH\n/);
     expect(card).toContain('✓ Simulated just now');
+    expect(dialogHeadline(card).split('\n')).toEqual([
+      'APPROVE SALE · Ethereum · cannot be undone',
+      'Sell Otherdeed Expanded #1',
+      'Offer  1 WETH',
+      'You receive  0.94 WETH',
+      `⚠ Royalty ${UNVERIFIED_ROYALTY_LABEL}.`,
+    ]);
   });
 
   it('cancel: plain words for each order with collection, token and price', async () => {
@@ -239,6 +263,28 @@ describe('approval cards', () => {
     expect(card).toMatch(/\nTransactions +1\n/);
     expect(card).toMatch(/\nNetwork fee +~[0-9.]+ ETH \(max [0-9.]+\)\n/);
     expect(detailsOf(card)).toBe(`Details: Seaport 0x0000…b395 · ${shortHex(listingHash)} · ${shortHex(offerHash)}`);
+  });
+});
+
+describe('dialog headline', () => {
+  it('summarises many warnings, keeps setting changes and the recipient, and caps the key lines', () => {
+    const card = new Card('purchase', 1, { irreversible: true });
+    for (let i = 1; i <= 8; i++) card.row(`Item #${i}`, '1 ETH').row('You receive', '1 ETH', 2);
+    card.warn('first warning').warn('second warning').warn('third warning').rule().row('Total', '8 ETH');
+    const lines = dialogHeadline(card.render()).split('\n');
+    expect(lines[0]).toBe('APPROVE PURCHASE · Ethereum · cannot be undone');
+    expect(lines).toContain('Item #1  1 ETH');
+    expect(lines).toContain('Total  8 ETH');
+    expect(lines.filter(line => line.startsWith('You receive'))).toEqual(['You receive  1 ETH']);
+    expect(lines.at(-2)).toMatch(/^… and \d+ more lines below$/);
+    expect(lines.at(-1)).toBe('⚠ 3 warnings - see below');
+    expect(lines.join('\n')).not.toContain('first warning');
+
+    const settings = ['APPROVE SETTING CHANGES', '- OSWIKI_MAX_TRADES_PER_DAY: 10 -> 3', '- OSWIKI_DRY_RUN: 0 -> 1', '', 'They apply right away.'].join('\n');
+    expect(dialogHeadline(settings)).toBe('APPROVE SETTING CHANGES\n- OSWIKI_MAX_TRADES_PER_DAY: 10 -> 3\n- OSWIKI_DRY_RUN: 0 -> 1');
+
+    const send = ['APPROVE SEND · Ethereum · cannot be undone', CARD_RULE, 'To   0x1234…abcd  (no ENS name)', '     0x1234000000000000000000000000000000abcd', CARD_RULE, '0.1 ETH  (wallet has 1 ETH)', '⚠ This address has never sent a transaction.'].join('\n');
+    expect(dialogHeadline(send)).toBe('APPROVE SEND · Ethereum · cannot be undone\nTo  0x1234…abcd  (no ENS name)\n⚠ This address has never sent a transaction.');
   });
 });
 

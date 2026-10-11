@@ -54,9 +54,11 @@ interface Stored extends Usage {
   pending: PendingTx[];
 }
 
+export const RAISE_LIMIT_HINT = "If the user wants more, offer to raise this limit with update_limits; they approve the change in oswiki-sign's dialog.";
+
 export class DailyCapError extends Error {
-  constructor(message: string) {
-    super(`${message} Nothing was signed or sent.`);
+  constructor(message: string, raisable = true) {
+    super(`${message} Nothing was signed or sent.${raisable ? ` ${RAISE_LIMIT_HINT}` : ''}`);
     this.name = 'DailyCapError';
   }
 }
@@ -340,7 +342,7 @@ export function withFileLock<T>(dir: string, lockFile: string, task: () => T): T
 
 function assertWithin(usage: Usage, charge: Charge, limits: Limits): void {
   if (usage.tampered) {
-    throw new DailyCapError('The trade state file (~/.oswiki-sign/state.json) failed its integrity check, so every daily limit counts as used. If you changed the wallet key, delete that file to reset it.');
+    throw new DailyCapError('The trade state file (~/.oswiki-sign/state.json) failed its integrity check, so every daily limit counts as used. If you changed the wallet key, delete that file to reset it.', false);
   }
   const trades = charge.trades ?? 0;
   if (trades > 0 && usage.trades + trades > limits.maxTrades) {

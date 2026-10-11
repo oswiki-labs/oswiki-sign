@@ -28,6 +28,7 @@ export interface Config {
   maxFeePerGasWei: Record<SupportedChainId, bigint>;
   allowedCollections: ReadonlySet<string> | null;
   blockedCollections: ReadonlySet<string> | null;
+  trustedCollections: ReadonlySet<string> | null;
   confirmMode: ConfirmMode;
   dryRun: boolean;
   stateDir: string;
@@ -97,6 +98,7 @@ function readAddresses(value: string | undefined, name: string): Set<string> | n
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const allowedCollections = readAddresses(env.OSWIKI_ALLOWED_COLLECTIONS, 'OSWIKI_ALLOWED_COLLECTIONS');
   const blockedCollections = readAddresses(env.OSWIKI_BLOCKED_COLLECTIONS, 'OSWIKI_BLOCKED_COLLECTIONS');
+  const trustedCollections = readAddresses(env.OSWIKI_TRUSTED_COLLECTIONS, 'OSWIKI_TRUSTED_COLLECTIONS');
 
   const dryRunRaw = env.OSWIKI_DRY_RUN?.trim().toLowerCase();
   const apiKey = env.OSWIKI_API_KEY?.trim();
@@ -141,6 +143,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     },
     allowedCollections,
     blockedCollections,
+    trustedCollections,
     confirmMode: readConfirmMode(env.OSWIKI_CONFIRM_MODE),
     dryRun: dryRunRaw === '1' || dryRunRaw === 'true' || dryRunRaw === 'yes',
     stateDir: env.OSWIKI_SIGN_STATE_DIR?.trim() || join(homedir(), '.oswiki-sign'),

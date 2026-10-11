@@ -123,6 +123,30 @@ export interface CollectionInfo {
   verified?: boolean | null;
 }
 
+export interface CollectionMatch {
+  address: string;
+  name: string;
+  slug: string;
+  verified: boolean | null;
+}
+
+export interface CollectionListing {
+  askId: string;
+  contract: string;
+  tokenId: string;
+  maker: string;
+  price: number | null;
+  marketplace: string;
+  buyable: boolean;
+  currencyContract: string | null;
+}
+
+export interface BestBids {
+  best: MarketOrder | null;
+  itemOffer: MarketOrder | null;
+  collectionOffer: MarketOrder | null;
+}
+
 export interface EnsLookup {
   address: string | null;
   apechainAddress: string | null;
@@ -147,6 +171,44 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function finiteOrNull(value: unknown): number | null {
   const parsed = typeof value === 'string' ? Number(value) : value;
   return typeof parsed === 'number' && Number.isFinite(parsed) ? parsed : null;
+}
+
+function collectionName(value: unknown): string {
+  return sanitizeServerText(value, 80).replace(/["`<>]/g, '\'');
+}
+
+function collectionInfo(data: Record<string, unknown>, fallbackAddress: string): CollectionInfo {
+  const stats = asRecord(data.stats);
+  const royalty = asRecord(data.royalty);
+  const royaltyRecipient = cleanAddress(royalty?.recipient);
+  const royaltyBps = royalty?.bps;
+  return {
+    address: cleanAddress(data.address) ?? fallbackAddress,
+    name: collectionName(data.name),
+    slug: sanitizeServerText(data.slug, 80),
+    contractType: cleanWord(typeof data.contractType === 'string' ? data.contractType.toLowerCase() : null) || null,
+    floorPrice: finiteOrNull(stats?.floorPrice),
+    currency: cleanSymbol(stats?.currency) || null,
+    royalty: royaltyRecipient && typeof royaltyBps === 'number' && Number.isInteger(royaltyBps) && royaltyBps >= 0 && royaltyBps <= 10000
+      ? { bps: royaltyBps, recipient: royaltyRecipient }
+      : null,
+    verified: typeof data.verified === 'boolean' ? data.verified : null,
+  };
+}
+
+function bidRow(row: unknown, chainId: number): MarketOrder {
+  const r = asRecord(row) ?? {};
+  return {
+    id: cleanOrderId(r.bidId) ?? '',
+    chainId,
+    contract: cleanAddress(asRecord(r.contract)?.address) ?? '',
+    tokenId: cleanTokenId(r.tokenId),
+    maker: cleanAddress(r.maker) ?? '',
+    price: finiteOrNull(r.price),
+    priceWei: uintOrNull(r.priceWei),
+    kind: cleanWord(r.kind),
+    expiresAt: r.expiresAt,
+  };
 }
 
 /**
@@ -262,20 +324,18 @@ export class ApiClient {
     const query: Record<string, string | number> = { chainId, maker, status: 'active', per_page: 100 };
     if (page > 1) query.page = page;
     const rows = await this.request('GET', '/v1/bids', query);
-    return (Array.isArray(rows) ? rows : []).map((row) => {
-      const r = asRecord(row) ?? {};
-      return {
-        id: cleanOrderId(r.bidId) ?? '',
-        chainId,
-        contract: cleanAddress(asRecord(r.contract)?.address) ?? '',
-        tokenId: cleanTokenId(r.tokenId),
-        maker: cleanAddress(r.maker) ?? '',
-        price: finiteOrNull(r.price),
-        priceWei: uintOrNull(r.priceWei),
-        kind: cleanWord(r.kind),
-        expiresAt: r.expiresAt,
-      };
-    }).filter(row => row.id !== '' && row.contract !== '' && row.maker === maker.toLowerCase());
+    return (Array.isArray(rows) ? rows : []).map(row => bidRow(row, chainId)).filter(row => row.id !== '' && row.contract !== '' && row.maker === maker.toLowerCase());
+  }
+
+  /** The best active OSWiki item and collection offer for one token, by what the seller nets. */
+  async bestBids(chainId: number, collection: string, tokenId: string): Promise<BestBids> {
+    const data = asRecord(await this.request('GET', '/v1/bids/best', { chainId, collection: collection.toLowerCase(), tokenId })) ?? {};
+    const pick = (value: unknown): MarketOrder | null => {
+      if (!asRecord(value)) return null;
+      const row = bidRow(value, chainId);
+      return row.id !== '' && row.contract !== '' ? row : null;
+    };
+    return { best: pick(data.best), itemOffer: pick(data.itemOffer), collectionOffer: pick(data.collectionOffer) };
   }
 
   /** Every active OSWiki offer of the maker, all pages; throws past `maxPages`. */
@@ -304,23 +364,80 @@ export class ApiClient {
   }
 
   async collection(chainId: number, address: string): Promise<CollectionInfo> {
-    const data = asRecord(await this.request('GET', `/v1/collections/${address.toLowerCase()}`, { chainId })) ?? {};
-    const stats = asRecord(data.stats);
-    const royalty = asRecord(data.royalty);
-    const royaltyRecipient = cleanAddress(royalty?.recipient);
-    const royaltyBps = royalty?.bps;
-    return {
-      address: cleanAddress(data.address) ?? address.toLowerCase(),
-      name: sanitizeServerText(data.name, 80),
-      slug: sanitizeServerText(data.slug, 80),
-      contractType: cleanWord(typeof data.contractType === 'string' ? data.contractType.toLowerCase() : null) || null,
-      floorPrice: finiteOrNull(stats?.floorPrice),
-      currency: cleanSymbol(stats?.currency) || null,
-      royalty: royaltyRecipient && typeof royaltyBps === 'number' && Number.isInteger(royaltyBps) && royaltyBps >= 0 && royaltyBps <= 10000
-        ? { bps: royaltyBps, recipient: royaltyRecipient }
-        : null,
-      verified: typeof data.verified === 'boolean' ? data.verified : null,
-    };
+    return collectionInfo(asRecord(await this.request('GET', `/v1/collections/${address.toLowerCase()}`, { chainId })) ?? {}, address.toLowerCase());
+  }
+
+  /** By slug or 0x address on this chain; null when the API knows no such collection. */
+  async findCollection(chainId: number, reference: string): Promise<CollectionInfo | null> {
+    let raw: unknown;
+    try {
+      raw = await this.request('GET', `/v1/collections/${encodeURIComponent(reference.toLowerCase())}`, { chainId });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }
+    const info = collectionInfo(asRecord(raw) ?? {}, '');
+    return info.address === '' ? null : info;
+  }
+
+  async searchCollections(chainId: number, search: string): Promise<CollectionMatch[]> {
+    const rows = await this.request('GET', '/v1/collections', { chainId, search: search.slice(0, 100), sort: 'volume', period: '30d', per_page: 20 });
+    return (Array.isArray(rows) ? rows : []).flatMap((row) => {
+      const r = asRecord(row) ?? {};
+      const address = cleanAddress(r.address);
+      return address ? [{ address, name: collectionName(r.name), slug: sanitizeServerText(r.slug, 80), verified: typeof r.verified === 'boolean' ? r.verified : null }] : [];
+    });
+  }
+
+  /** Active listings of the collection on every marketplace, cheapest first. */
+  async collectionListings(chainId: number, slug: string, perPage = 100): Promise<CollectionListing[]> {
+    if (!/^[A-Za-z0-9._-]{1,200}$/.test(slug)) return [];
+    const rows = await this.request('GET', '/v1/listings', { chainId, collection: slug, status: 'active', marketplace: 'all', sort: 'price_asc', per_page: perPage });
+    return (Array.isArray(rows) ? rows : []).flatMap((row) => {
+      const r = asRecord(row) ?? {};
+      const askId = typeof r.askId === 'string' ? r.askId.toLowerCase() : '';
+      const contract = cleanAddress(asRecord(r.contract)?.address);
+      const tokenId = cleanTokenId(r.tokenId);
+      if (!askId || !contract || tokenId === null) return [];
+      const price = asRecord(r.price);
+      const currency = asRecord(price?.currency);
+      return [{
+        askId,
+        contract,
+        tokenId,
+        maker: cleanAddress(r.maker) ?? '',
+        price: finiteOrNull(asRecord(price?.amount)?.decimal),
+        marketplace: cleanWord(typeof r.marketplace === 'string' ? r.marketplace.toLowerCase() : null),
+        buyable: r.buyableViaApi === true,
+        currencyContract: cleanAddress(currency?.contract ?? currency?.address),
+      }];
+    });
+  }
+
+  /** ERC-721 token ids the index says the owner holds, in token order; `more` when there are further ones. */
+  async ownedTokenIds(chainId: number, address: string, owner: string, limit: number): Promise<{ tokenIds: string[]; more: boolean }> {
+    const wanted = address.toLowerCase();
+    const holder = owner.toLowerCase();
+    const ids = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 0; page < 20; page++) {
+      const query: Record<string, string | number> = { chainId, owner: holder, per_page: 100 };
+      if (cursor) query.cursor = cursor;
+      const envelope = await this.envelope('GET', `/v1/collections/${wanted}/tokens`, query);
+      const rows = Array.isArray(envelope.data) ? envelope.data : [];
+      for (const row of rows) {
+        const r = asRecord(row) ?? {};
+        const contract = asRecord(r.contract)?.address;
+        if (typeof contract === 'string' && contract.toLowerCase() !== wanted) continue;
+        if (cleanAddress(r.owner) !== holder) continue;
+        const tokenId = cleanTokenId(r.tokenId);
+        if (tokenId !== null) ids.add(tokenId);
+      }
+      const next = asRecord(envelope.meta)?.next_cursor;
+      cursor = typeof next === 'string' && next !== '' && rows.length > 0 ? next : null;
+      if (!cursor || ids.size > limit) return { tokenIds: [...ids].slice(0, limit), more: ids.size > limit || cursor !== null };
+    }
+    return { tokenIds: [...ids].slice(0, limit), more: true };
   }
 
   async ensResolve(name: string, chainId: number): Promise<EnsLookup> {
@@ -429,6 +546,10 @@ export class ApiClient {
   }
 
   private async request(method: 'GET' | 'POST', path: string, query?: Record<string, string | number>, body?: unknown, partialBatch = false): Promise<unknown> {
+    return (await this.envelope(method, path, query, body, partialBatch)).data;
+  }
+
+  private async envelope(method: 'GET' | 'POST', path: string, query?: Record<string, string | number>, body?: unknown, partialBatch = false): Promise<Record<string, unknown>> {
     const url = new URL(path, this.options.base ?? API_BASE);
     for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, String(value));
     const headers: Record<string, string> = { Accept: 'application/json' };
@@ -454,12 +575,12 @@ export class ApiClient {
       json = null;
     }
     const envelope = asRecord(json);
-    if (partialBatch && envelope && Array.isArray(asRecord(envelope.data)?.results)) return envelope.data;
+    if (partialBatch && envelope && Array.isArray(asRecord(envelope.data)?.results)) return envelope;
     if (!response.ok || !envelope || envelope.success === false) {
       const message = sanitizeServerText(envelope?.message ?? envelope?.error) || `HTTP ${response.status}`;
       const code = typeof envelope?.code === 'string' ? sanitizeServerText(envelope.code, 40) : null;
       throw new ApiError(`OSWiki API ${path} failed: ${message}${code ? ` (${code})` : ''}`, code, response.status);
     }
-    return envelope.data;
+    return envelope;
   }
 }

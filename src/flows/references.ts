@@ -1,8 +1,11 @@
-import type { CollectionInfo, SaleReference, TokenReference } from '../api.js';
-import { MAINNET_ID, NATIVE_SYMBOL, OTHERDEED_CONTRACTS, WRAPPED_SYMBOL, type SupportedChainId } from '../constants.js';
+import { NFT_ABI, SEAPORT_GET_ORDER_STATUS_ABI } from '../abi.js';
+import type { CollectionInfo, CollectionListing, SaleReference, TokenReference } from '../api.js';
+import { MAINNET_ID, NATIVE_SYMBOL, OPENSEA_CONDUIT_ADDRESS, OPENSEA_CONDUIT_KEY, OTHERDEED_CONTRACTS, SEAPORT_ADDRESS, WRAPPED_SYMBOL, ZERO_ADDRESS, ZERO_BYTES32, type SupportedChainId } from '../constants.js';
 import { ageLabel, native, trimAmount } from '../format.js';
+import { verifySeaportOrderSignature } from '../seaport/sign.js';
+import { BUY_ASK_ID_RE, loadOrder, type BuyMarketplace } from './buy.js';
 import type { Ctx } from './common.js';
-import { floorToWei } from './common.js';
+import { floorToWei, me } from './common.js';
 
 export const REFERENCE_MAX_AGE_DAYS = 90;
 export const WARN_BELOW_PCT = 70;
@@ -39,16 +42,131 @@ export function resolveFloor(info: CollectionInfo | null, cheapestListing: numbe
   return { wei: apiWei, unavailable: info === null, warning: null };
 }
 
-/** Otherdeed and Otherdeed Expanded share one floor: the lower of the two contracts. */
-export async function fetchFloor(ctx: Ctx, chainId: SupportedChainId, contract: string): Promise<{ info: CollectionInfo | null; floor: FloorReference }> {
+export interface FloorGroup {
+  contracts: string[];
+  infos: Array<CollectionInfo | null>;
+}
+
+/** Otherdeed and Otherdeed Expanded share one floor. */
+export async function fetchFloorGroup(ctx: Ctx, chainId: SupportedChainId, contract: string): Promise<FloorGroup> {
   const own = contract.toLowerCase();
   const contracts = chainId === MAINNET_ID && OTHERDEED.has(own) ? [own, ...OTHERDEED_CONTRACTS.filter(address => address !== own)] : [own];
   const infos = await Promise.all(contracts.map(address => ctx.api.collection(chainId, address).catch(() => null)));
+  return { contracts, infos };
+}
+
+/** The lower of the shared contracts' API floors, cross-checked against the cheapest API listing. */
+export async function fetchFloor(ctx: Ctx, chainId: SupportedChainId, contract: string, group?: FloorGroup): Promise<{ info: CollectionInfo | null; floor: FloorReference }> {
+  const { contracts, infos } = group ?? await fetchFloorGroup(ctx, chainId, contract);
   const info = infos[0] ?? null;
   const cheapest = await Promise.all(infos.map((entry, i) => (entry?.slug ? ctx.api.cheapestListing(chainId, entry.slug, contracts[i]!).catch(() => null) : null)));
   const lowest = (values: Array<number | null | undefined>) => values.reduce<number | null>((min, value) => (typeof value === 'number' && value > 0 && (min === null || value < min) ? value : min), null);
   const combined = info ? { ...info, floorPrice: lowest(infos.map(entry => entry?.floorPrice)) } : null;
   return { info, floor: resolveFloor(combined, lowest(cheapest), chainId) };
+}
+
+export const VERIFIED_FLOOR_CANDIDATES = 5;
+export const SALES_WINDOW_DAYS = 30;
+export const SALES_MIN_COUNT = 3;
+export const FLOOR_MIN_MEDIAN_PCT = 70;
+
+export function isBuyableRow(row: CollectionListing): boolean {
+  const marketOk = (row.marketplace === 'oswiki' && row.askId.startsWith('oswiki-')) || (row.marketplace === 'opensea' && !row.askId.startsWith('oswiki-'));
+  return row.buyable && marketOk && BUY_ASK_ID_RE.test(row.askId) && (row.currencyContract === null || row.currencyContract === ZERO_ADDRESS);
+}
+
+export interface FloorListing {
+  askId: string;
+  contract: string;
+  tokenId: string;
+  marketplace: BuyMarketplace;
+  unitWei: bigint;
+}
+
+export interface VerifiedFloor {
+  wei: bigint | null;
+  listing: FloorListing | null;
+  checked: number;
+  salesMedianWei: bigint | null;
+  salesCount: number;
+  problem: string | null;
+}
+
+/** Order data checked like a buy (guards, struct hash under the live counter), plus signature, status, expiry, seller balance and approval. */
+export async function fillableListing(ctx: Ctx, chainId: SupportedChainId, askId: string, contract: string): Promise<FloorListing | null> {
+  try {
+    const loaded = await loadOrder(ctx, chainId, askId);
+    if (loaded.contract.toLowerCase() !== contract.toLowerCase()) return null;
+    const params = loaded.order.parameters;
+    const nowSeconds = BigInt(Math.floor(ctx.now() / 1000));
+    if (params.startTime > nowSeconds || params.endTime <= nowSeconds) return null;
+    if (!(await verifySeaportOrderSignature({ chainId, offerer: params.offerer, orderHash: loaded.orderHash, signature: loaded.order.signature }))) return null;
+    const conduitKey = params.conduitKey.toLowerCase();
+    const operator = conduitKey === OPENSEA_CONDUIT_KEY ? OPENSEA_CONDUIT_ADDRESS : conduitKey === ZERO_BYTES32 ? SEAPORT_ADDRESS : null;
+    if (!operator) return null;
+    const client = ctx.chains.client(chainId);
+    const item = params.offer[0]!;
+    const [status, holds, approved] = await Promise.all([
+      client.readContract({ address: SEAPORT_ADDRESS, abi: SEAPORT_GET_ORDER_STATUS_ABI, functionName: 'getOrderStatus', args: [loaded.orderHash] }),
+      item.itemType === 3
+        ? client.readContract({ address: item.token, abi: NFT_ABI, functionName: 'balanceOf', args: [params.offerer, item.identifierOrCriteria] }).then(balance => balance >= loaded.quantity)
+        : client.readContract({ address: item.token, abi: NFT_ABI, functionName: 'ownerOf', args: [item.identifierOrCriteria] }).then(owner => owner.toLowerCase() === params.offerer.toLowerCase()),
+      client.readContract({ address: item.token, abi: NFT_ABI, functionName: 'isApprovedForAll', args: [params.offerer, operator] }),
+    ]);
+    const [, cancelled, filled, size] = status;
+    if (cancelled || (size > 0n && filled >= size) || !holds || approved !== true) return null;
+    return { askId, contract: loaded.contract.toLowerCase(), tokenId: loaded.tokenId, marketplace: loaded.marketplace, unitWei: loaded.value / (loaded.quantity > 0n ? loaded.quantity : 1n) };
+  } catch {
+    return null;
+  }
+}
+
+function median(values: bigint[]): bigint {
+  const sorted = [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2n;
+}
+
+/**
+ * Floor for floorPct pricing: the cheapest of the API's cheapest few listings that oswiki-sign itself verified as fillable,
+ * so a fake API listing cannot pull the price down. A low floor against the 30-day median sale is flagged as a problem.
+ */
+export async function fetchVerifiedFloor(ctx: Ctx, chainId: SupportedChainId, group: FloorGroup): Promise<VerifiedFloor> {
+  const wallet = me(ctx);
+  const [listed, sales] = await Promise.all([
+    Promise.all(group.infos.map((info, i) => (info?.slug
+      ? ctx.api.collectionListings(chainId, info.slug, 50).then(rows => rows.filter(row => row.contract === group.contracts[i])).catch(() => [])
+      : Promise.resolve([])))),
+    Promise.all(group.contracts.map(contract => ctx.api.sales(chainId, contract, {}, 50).catch(() => []))),
+  ]);
+  const seen = new Set<string>();
+  const candidates = listed.flat()
+    .filter((row) => {
+      if (row.maker === wallet || !isBuyableRow(row) || seen.has(row.askId)) return false;
+      seen.add(row.askId);
+      return true;
+    })
+    .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))
+    .slice(0, VERIFIED_FLOOR_CANDIDATES);
+  const verified = (await Promise.all(candidates.map(row => fillableListing(ctx, chainId, row.askId, row.contract)))).filter((entry): entry is FloorListing => entry !== null);
+  const listing = verified.reduce<FloorListing | null>((min, entry) => (min === null || entry.unitWei < min.unitWei ? entry : min), null);
+
+  const nowMs = ctx.now();
+  const recent = sales.flat().flatMap((sale) => {
+    const age = ageLabel(sale.timestamp, nowMs);
+    return inChainCurrency(sale.currency, chainId) && age.days !== null && age.days <= SALES_WINDOW_DAYS ? [toWei(sale.price)] : [];
+  });
+  const salesMedianWei = recent.length >= SALES_MIN_COUNT ? median(recent) : null;
+
+  let problem: string | null = null;
+  if (listing === null) {
+    problem = candidates.length === 0
+      ? 'the OSWiki API returned no active listing that oswiki-sign can check'
+      : `none of the ${candidates.length} cheapest listings the OSWiki API returned could be verified as fillable (order data, signature, seller's counter, order status, ownership, approval)`;
+  } else if (salesMedianWei !== null && listing.unitWei * 100n < salesMedianWei * BigInt(FLOOR_MIN_MEDIAN_PCT)) {
+    problem = `the verified floor ${native(listing.unitWei, chainId)} is under ${FLOOR_MIN_MEDIAN_PCT}% of the ${SALES_WINDOW_DAYS}-day median sale price ${native(salesMedianWei, chainId)} (${recent.length} sales)`;
+  }
+  return { wei: listing?.unitWei ?? null, listing, checked: candidates.length, salesMedianWei, salesCount: recent.length, problem };
 }
 
 export interface CollectionReferences {

@@ -8,7 +8,7 @@ import { isSupportedChain, NATIVE_SYMBOL, OPENSEA_CONDUIT_ADDRESS, type Supporte
 import { native } from '../format.js';
 import { isConduitRestriction } from '../seaport/fulfill.js';
 import { serializeOrderComponents, type OrderComponents } from '../seaport/order.js';
-import type { TradeState } from '../state.js';
+import { RAISE_LIMIT_HINT, type TradeState } from '../state.js';
 
 export interface Ctx {
   config: Config;
@@ -100,7 +100,7 @@ export function assertBuyingEnabled(config: Config, chainId: SupportedChainId): 
 export function assertMaxBuy(config: Config, chainId: SupportedChainId, totalWei: bigint, what: string): void {
   const cap = assertBuyingEnabled(config, chainId);
   if (totalWei > cap) {
-    throw new GuardError(`${what} of ${native(totalWei, chainId)} is above the per-trade limit of ${native(cap, chainId)} (OSWIKI_MAX_BUY_${NATIVE_SYMBOL[chainId]}). Nothing was signed or sent.`);
+    throw new GuardError(`${what} of ${native(totalWei, chainId)} is above the per-trade limit of ${native(cap, chainId)} (OSWIKI_MAX_BUY_${NATIVE_SYMBOL[chainId]}). Nothing was signed or sent. ${RAISE_LIMIT_HINT}`);
   }
 }
 

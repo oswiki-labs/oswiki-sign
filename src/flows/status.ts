@@ -7,12 +7,13 @@ import type { Config, ConfirmMode } from '../config.js';
 import { APECHAIN_ID, MAINNET_ID, NATIVE_SYMBOL, SUPPORTED_CHAINS, WRAPPED_NATIVE, type SupportedChainId } from '../constants.js';
 import { CONFIRM_OFF_WARNING, native, wrapped } from '../format.js';
 import { DENY_RULES, missingDenyRules, PACKAGE_NAME } from '../setup.js';
+import { cachedUpdate, updateNotice } from '../update-check.js';
 import { VERSION } from '../version.js';
 import { chainOf, type Ctx } from './common.js';
 
 const CHAIN_NAME: Record<SupportedChainId, string> = { [MAINNET_ID]: 'Ethereum', [APECHAIN_ID]: 'ApeChain' };
 
-export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overrides?: Record<string, string>; settingsWarning?: string | null; claudeCode?: boolean; home?: string } = {}): Promise<string> {
+export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overrides?: Record<string, string>; settingsWarning?: string | null; claudeCode?: boolean; home?: string; env?: NodeJS.ProcessEnv } = {}): Promise<string> {
   const address = ctx.account.address;
   const balances = await Promise.all(SUPPORTED_CHAINS.map(async (chainId) => {
     const client = ctx.chains.client(chainId);
@@ -55,9 +56,11 @@ export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overri
     return `- listings and accepted offers today on ${CHAIN_NAME[chainId]}: ${belowText}; ${sellText}`;
   };
   const pending = ctx.state.pendingTxs();
+  const latest = cachedUpdate({ stateDir: config.stateDir, version: VERSION, env: options.env ?? process.env });
   return [
     `Wallet ${address.toLowerCase()}`,
     ...balances,
+    latest ? updateNotice(latest, VERSION) : '',
     config.confirmMode === 'off' ? CONFIRM_OFF_WARNING : '',
     config.confirmMode === 'off' && options.claudeCode ? denyRulesWarning(options.home ?? homedir()) : '',
     'Limits:',
@@ -86,7 +89,7 @@ export async function walletStatus(ctx: Ctx, options: { dialog?: boolean; overri
 function denyRulesWarning(home: string): string {
   const missing = missingDenyRules(home);
   if (missing === null || missing.length === 0) return '';
-  return `WARNING: confirmation is off and ${missing.length} of the ${DENY_RULES.length} oswiki-sign deny rules are missing from ~/.claude/settings.json, so the agent could read the key file or change its own limits. Run \`npx -y ${PACKAGE_NAME}@${VERSION} setup\` again in your own terminal (it adds them) or see the README, Claude Code hardening.`;
+  return `WARNING: confirmation is off and ${missing.length} of the ${DENY_RULES.length} oswiki-sign deny rules are missing from ~/.claude/settings.json, so the agent could read the key file or change its own limits. Run \`npx -y ${PACKAGE_NAME} setup\` again in your own terminal (it adds them) or see the README, Claude Code hardening.`;
 }
 
 function collectionsLine(config: Config): string {
@@ -119,6 +122,7 @@ export function settingValues(config: Config): Array<[string, string]> {
     ['OSWIKI_MAX_GWEI_APECHAIN', gwei(config.maxFeePerGasWei[APECHAIN_ID])],
     ['OSWIKI_ALLOWED_COLLECTIONS', config.allowedCollections ? [...config.allowedCollections].join(',') : 'not set (any collection)'],
     ['OSWIKI_BLOCKED_COLLECTIONS', config.blockedCollections ? [...config.blockedCollections].join(',') : 'not set (none blocked)'],
+    ['OSWIKI_TRUSTED_COLLECTIONS', config.trustedCollections ? [...config.trustedCollections].join(',') : 'not set (autonomous mode trades verified collections only)'],
   ];
 }
 
@@ -126,8 +130,8 @@ function settingsHelp(config: Config, fromChat: ReadonlySet<string>): string[] {
   return [
     'Settings in force (exact names and values; source: setup/env, or chat when changed with update_limits):',
     ...settingValues(config).map(([key, value]) => `- ${key}=${value} (${fromChat.has(key) ? 'chat' : 'setup/env'})`),
-    `To change limits or confirmation: run \`npx -y ${PACKAGE_NAME}@${VERSION} setup\` again in your own terminal (keep the wallet), then restart the AI client.`,
-    'Or ask here: update_limits changes them right away, after the user approves the change in oswiki-sign\'s own dialog (clients without that dialog must use setup). Gas caps are edited in the env block of the oswiki-sign entry in the AI client\'s config. Never change a setting the user did not ask for.',
+    `To change limits or confirmation: run \`npx -y ${PACKAGE_NAME} setup\` again in your own terminal (keep the wallet), then restart the AI client.`,
+    'Or ask here: update_limits changes them right away, after the user approves the change in oswiki-sign\'s own dialog (or its browser approval page; with neither, use setup). Gas caps are edited in the env block of the oswiki-sign entry in the AI client\'s config. Never change a setting the user did not ask for.',
   ];
 }
 
@@ -138,8 +142,8 @@ export function confirmLine(mode: ConfirmMode, dialog: boolean | undefined): str
     if (dialog === false) return 'WARNING - OSWIKI_CONFIRM_MODE=ai: dialog when the client supports it (yours doesn\'t), otherwise the AI\'s confirmation, so execute runs on the AI\'s word alone';
     return 'ai (OSWIKI_CONFIRM_MODE=ai): dialog when the client supports it, otherwise the AI\'s confirmation';
   }
-  if (dialog === true) return 'human (OSWIKI_CONFIRM_MODE=human): you approve every trade in the dialog';
-  if (dialog === false) return 'this MCP client cannot show the confirmation dialog, so execute is refused (OSWIKI_CONFIRM_MODE=human)';
+  if (dialog === true) return 'human (OSWIKI_CONFIRM_MODE=human): you approve every trade in the dialog (or the browser approval page when the client has no dialog)';
+  if (dialog === false) return 'this MCP client cannot show the confirmation dialog and the browser approval page is off (OSWIKI_BROWSER_APPROVAL=0), so execute is refused (OSWIKI_CONFIRM_MODE=human)';
   return 'human (OSWIKI_CONFIRM_MODE=human): you approve every trade in the dialog of the MCP client';
 }
 

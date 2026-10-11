@@ -23,7 +23,7 @@ const BURN_ADDRESSES = new Set<string>([
 ]);
 const EIP7702_PREFIX = '0xef0100';
 
-export const NO_DIALOG_SEND = 'Refused: sending NFTs or funds needs your approval in oswiki-sign\'s own dialog, and this MCP client cannot show it (MCP elicitation). Sending is never allowed on the AI\'s word, whatever OSWIKI_CONFIRM_MODE says. Use an MCP client that supports elicitation, or send from your wallet app. Nothing was sent.';
+export const NO_DIALOG_SEND = 'Refused: sending NFTs or funds needs your approval in oswiki-sign\'s own dialog, and this MCP client cannot show it (MCP elicitation) while the browser approval page is switched off (OSWIKI_BROWSER_APPROVAL=0). Sending is never allowed on the AI\'s word, whatever OSWIKI_CONFIRM_MODE says. Remove OSWIKI_BROWSER_APPROVAL=0, use an MCP client that supports elicitation, or send from your wallet app. Nothing was sent.';
 
 type Amount = string | number;
 

@@ -16,11 +16,10 @@ import { OPENSEA_CONDUIT_ADDRESS, SEAPORT_ADDRESS, WRAPPED_NATIVE } from '../src
 import { hashOrderComponents } from '../src/seaport/sign.js';
 import { buildListingOrder, serializeOrderComponents } from '../src/seaport/order.js';
 import { INLINE_KEY_MESSAGE, loadWallet } from '../src/secret.js';
-import { CARD_TRAILER, chargeOf, CONFIRM_MODE_HELP, createSignServer, createToolHandler, elicitationConfirmer, NO_HUMAN_CONFIRMER, serverInstructions, toolDefinitions, type HumanConfirmer } from '../src/server.js';
+import { CARD_TRAILER, chargeOf, CONFIRM_MODE_HELP, createSignServer, createToolHandler, elicitationConfirmer, NO_HUMAN_CONFIRMER, serverInstructions, toolDefinitions, withSignal, type HumanConfirmer } from '../src/server.js';
 import { AI_MODE_WITH_DIALOG } from '../src/flows/limits.js';
 import { confirmLine } from '../src/flows/status.js';
 import { SettingsStore } from '../src/settings.js';
-import { VERSION } from '../src/version.js';
 import { LOCK_STALE_MS, StateLockError, TradeState, type PendingTx } from '../src/state.js';
 import vectors from './fixtures/seaport-vectors.json' with { type: 'json' };
 import { cancelLogs, COLLECTION, confirmIdOf, ETH, fulfilledLog, harness, MAINNET_FEE_RECIPIENT, makeTransport, newChainState, OTHER_SELLER, TEST_ADDRESS, TEST_KEY, testKeyFile, type Harness } from './helpers.js';
@@ -147,7 +146,7 @@ describe('human confirmation (H2)', () => {
       expect(status).toContain(line);
     }
     expect(status).not.toContain('Confirmation: OFF');
-    expect(status.trimEnd().split('\n').at(-2)).toBe(`To change limits or confirmation: run \`npx -y @oswikixyz/sign@${VERSION} setup\` again in your own terminal (keep the wallet), then restart the AI client.`);
+    expect(status.trimEnd().split('\n').at(-2)).toBe(`To change limits or confirmation: run \`npx -y @oswikixyz/sign setup\` again in your own terminal (keep the wallet), then restart the AI client.`);
   });
 
   it('shows the full preview in the dialog and sends nothing when the user declines', async () => {
@@ -208,8 +207,11 @@ describe('human confirmation (H2)', () => {
       const server = createSignServer(h.handler);
       const client = new Client({ name: 'test', version: '1.0.0' }, { capabilities: { elicitation: { form: {} } } });
       const messages: string[] = [];
+      const descriptions: string[] = [];
       client.setRequestHandler(ElicitRequestSchema, async (request) => {
-        messages.push((request.params as { message: string }).message);
+        const params = request.params as unknown as { message: string; requestedSchema: { properties: { confirm: { description: string } } } };
+        messages.push(params.message);
+        descriptions.push(params.requestedSchema.properties.confirm.description);
         return run.content ? { action: run.action, content: run.content } : { action: run.action };
       });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -219,16 +221,65 @@ describe('human confirmation (H2)', () => {
       const result = await client.callTool({ name: 'execute', arguments: { confirmId: confirmIdOf(preview.content[0]!.text) } }) as { isError?: boolean };
       expect(result.isError === true).toBe(run.error);
       expect(messages).toHaveLength(1);
-      expect(messages[0]).toContain('not the AI');
+      expect(messages[0]).toMatch(/^APPROVE PURCHASE · Ethereum · cannot be undone\n/);
+      expect(messages[0]).toMatch(/\nTotal {2}1 ETH(\n|$)/);
+      expect(messages[0]).not.toContain('─');
+      expect(descriptions[0]).toMatch(/\nTotal +1 ETH\n/);
+      expect(descriptions[0]).not.toContain('─');
       expect(h.chain.sent).toHaveLength(run.sent);
       await client.close();
     }
   });
 
+  it('a cancelled execute cancels its open dialog and a late answer never trades', async () => {
+    const h = harness({ logsFor: () => [fulfilledLog(vectorHash, OTHER_SELLER)] });
+    setupBuy(h);
+    const server = createSignServer(h.handler);
+    const client = new Client({ name: 'test', version: '1.0.0' }, { capabilities: { elicitation: { form: {} } } });
+    let dialogSignal: AbortSignal | undefined;
+    let answer: () => void = () => undefined;
+    client.setRequestHandler(ElicitRequestSchema, (_request, extra) => {
+      dialogSignal = extra.signal;
+      return new Promise(resolve => {
+        answer = () => resolve({ action: 'accept', content: { confirm: true } });
+      });
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    // The SDK ignores notifications/cancelled for request id 0, so the dialog must not be the first server request.
+    await server.ping();
+    const preview = await client.callTool({ name: 'preview_buy', arguments: { chainId: 1, askIds: [vectorAskId] } }) as { content: Array<{ text: string }> };
+    const controller = new AbortController();
+    const call = client.callTool({ name: 'execute', arguments: { confirmId: confirmIdOf(preview.content[0]!.text) } }, undefined, { signal: controller.signal });
+    await vi.waitFor(() => expect(dialogSignal).toBeDefined());
+    controller.abort();
+    await expect(call).rejects.toThrow();
+    await vi.waitFor(() => expect(dialogSignal!.aborted).toBe(true));
+    answer();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(h.chain.sent).toHaveLength(0);
+    await client.close();
+  });
+
+  it('withSignal declines a pending ask when the call is cancelled, even if the confirmer ignores the signal', async () => {
+    let release: (decision: 'confirmed') => void = () => undefined;
+    const seen: Array<AbortSignal | undefined> = [];
+    const stubborn: HumanConfirmer = { available: () => true, ask: (_message, _title, signal) => { seen.push(signal); return new Promise(resolve => { release = resolve; }); } };
+    const controller = new AbortController();
+    const pending = withSignal(stubborn, controller.signal).ask('card', 'title');
+    controller.abort();
+    await expect(pending).resolves.toBe('declined');
+    release('confirmed');
+    expect(seen[0]).toBe(controller.signal);
+    await expect(withSignal(stubborn, controller.signal).ask('card')).resolves.toBe('declined');
+    expect(seen).toHaveLength(1);
+    expect(withSignal(stubborn, undefined)).toBe(stubborn);
+  });
+
   it('treats a client without the elicitation capability as having no dialog', async () => {
     const h = harness();
     setupBuy(h);
-    const server = createSignServer(h.handler);
+    const server = createSignServer(h.handler, { env: { OSWIKI_BROWSER_APPROVAL: '0' } });
     const client = new Client({ name: 'test', version: '1.0.0' }, { capabilities: {} });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -286,7 +337,7 @@ describe('update_limits', () => {
     expect(approve.asked).toHaveLength(1);
     expect(approve.asked[0]).toContain('- OSWIKI_MAX_BUY_ETH: 1000 -> 0.5');
     expect(approve.asked[0]).toContain('- OSWIKI_MAX_TRADES_PER_DAY: 50 -> 10');
-    expect(approve.asked[0]).toContain('not the AI');
+    expect(approve.asked[0]).toMatch(/^APPROVE SETTING CHANGES\n/);
     expect(h.ctx.config.maxBuyWei[1]).toBe(ETH / 2n);
     expect((await h.call('preview_buy', { chainId: 1, askIds: [vectorAskId] })).text).toMatch(/above the per-trade limit of 0\.5 ETH/);
     const status = (await h.call('wallet_status')).text;
@@ -313,7 +364,7 @@ describe('update_limits', () => {
     for (const args of [{ maxBuyEth: '1' }, { dryRun: true }, { confirmMode: 'off' }]) {
       const result = await h.call('update_limits', args);
       expect(result.isError).toBe(true);
-      expect(result.text).toMatch(/cannot show it\. The user can run `npx -y @oswikixyz\/sign@.* setup` again/);
+      expect(result.text).toMatch(/cannot show it while the browser approval page is switched off \(OSWIKI_BROWSER_APPROVAL=0\)\. The user can run `npx -y @oswikixyz\/sign@.* setup` again/);
     }
     expect(h.settings.overrides).toEqual({});
   });
@@ -471,6 +522,7 @@ describe('daily value and cancel caps (M4)', () => {
     const blocked = await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) });
     expect(blocked.isError).toBe(true);
     expect(blocked.text).toMatch(/Daily spend limit on Ethereum: 1 ETH used today plus 1 ETH would exceed 1\.5 ETH \(OSWIKI_DAILY_MAX_ETH/);
+    expect(blocked.text).toMatch(/offer to raise this limit with update_limits/);
     expect(h.chain.sent).toHaveLength(1);
     h.setNow(NOW + 86_400_000);
     expect((await h.call('execute', { confirmId: confirmIdOf(await previewBuy(h)) })).isError).toBe(false);

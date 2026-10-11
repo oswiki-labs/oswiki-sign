@@ -523,7 +523,7 @@ describe('unwrap', () => {
     const text = (await h.call('preview_unwrap', { chainId: 1, amount: '1' })).text;
     const result = await h.call('execute', { confirmId: confirmIdOf(text) });
     expect(result.isError).toBe(true);
-    expect(confirmer.asked[0]!.message).toMatch(/approve this trade/);
+    expect(confirmer.asked[0]!.message).toMatch(/^APPROVE UNWRAP · Ethereum/);
     expect(h.world.sent).toHaveLength(0);
   });
 });
@@ -771,5 +771,36 @@ describe('recipient names and addresses', () => {
     expect(bad.text).toMatch(/fails its EIP-55 checksum/);
     const badContract = await h.call('preview_transfer', { chainId: 1, to: FRIEND, items: [{ contract: '0x790B2cf29ed4f310bf7641f013c65d4560d28371', tokenId: '1' }] });
     expect(badContract.text).toMatch(/collection address .* fails its EIP-55 checksum/);
+  });
+});
+
+describe('sending by collection', () => {
+  function routeMine(h: ReturnType<typeof setup>) {
+    const profile = { address: NFT721, name: 'My NFTs', slug: 'my-nfts', verified: true };
+    h.api.routes.set('GET /v1/collections/my-nfts', () => profile);
+    h.api.routes.set(`GET /v1/collections/${NFT721}`, () => profile);
+    h.api.routes.set(`GET /v1/collections/${NFT721}/tokens`, () => ['1', '2', '5'].map(tokenId => ({ tokenId, owner: TEST_ADDRESS, contract: { address: NFT721 } })));
+  }
+
+  it('picks every held token of a collection, dropping stale index rows', async () => {
+    const confirmer = recorder();
+    const h = setup({ confirmer });
+    routeMine(h);
+    const text = await previewOk(h, { chainId: 1, to: FRIEND, collections: [{ collection: 'my-nfts', all: true }] });
+    expect(text.replace(/\s+/g, ' ')).toContain('Picked by oswiki-sign: all 2 tokens of your My NFTs: #1, #2.');
+    expect(text).toContain('Collection: My NFTs · ✓ verified');
+    expect(text).toContain(FRIEND);
+    expect((await h.call('execute', { confirmId: confirmIdOf(text) })).isError).toBe(false);
+    expect(confirmer.asked).toHaveLength(1);
+    expect(h.world.sent.map(tx => decodeFunctionData({ abi: ERC721_SAFE_TRANSFER_ABI, data: tx.data }).args[2])).toEqual([1n, 2n]);
+  });
+
+  it('takes collection instead of contract per item and respects count', async () => {
+    const h = setup();
+    routeMine(h);
+    const text = await previewOk(h, { chainId: 1, to: FRIEND, items: [{ collection: 'my-nfts', tokenId: '2' }], collections: [{ collection: 'my-nfts', count: 1 }] });
+    expect(text.replace(/\s+/g, ' ')).toContain('Picked by oswiki-sign: 1 token of your My NFTs: #1.');
+    expect(text).toContain(`My NFTs #2  (${NFT721}, ERC-721)`);
+    expect((await h.call('preview_transfer', { chainId: 1, to: FRIEND, collections: [{ collection: 'my-nfts' }] })).text).toMatch(/pass either count or all: true/);
   });
 });

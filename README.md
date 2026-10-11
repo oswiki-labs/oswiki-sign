@@ -7,18 +7,28 @@ The private key stays on your machine. The AI never sees it, the hosted OSWiki M
 ## Quick setup
 
 ```sh
-npx -y @oswikixyz/sign@0.2.4 setup
+npx -y @oswikixyz/sign setup
 ```
 
 Run it in a terminal (Node.js 20 or newer). Five short steps:
 
 1. **Wallet**: creates a new trading wallet (recommended) or imports a private key at a hidden prompt, and stores the key in `~/.oswiki-sign/key` (Windows: `%USERPROFILE%\.oswiki-sign\key`), readable only by you. The key is only shown if you choose to back it up.
-2. **Limits**: max per buy on each chain (or no buys), the floor guard (% of the floor), trades per day, dry run.
+2. **Limits**: one "Use recommended limits?" answer takes 0.05 ETH / 25 APE max per buy, floor guard 50%, 50 trades per day, dry run off and sends off; "n" asks for each: max per buy on each chain (or no buys), the floor guard (% of the floor), trades per day, dry run, daily send limits.
 3. **Collections**: any, only these (allowlist) or any except these (blocklist). Type slugs or `0x` addresses; setup looks them up on Ethereum and ApeChain, shows `name (chain) 0x...` for each and stores the addresses. Otherdeed always brings both of its contracts. Without the OSWiki API only raw `0x` addresses are accepted.
 4. **Confirmation**: every trade waits for your OK in oswiki-sign's own dialog (recommended), or the AI may trade on its own within your limits (`OSWIKI_CONFIRM_MODE=off`, see [Confirmation dialog](#confirmation-dialog)).
 5. **Client**: adds oswiki-sign to Claude Code (`claude mcp add --scope user`), Cursor (`~/.cursor/mcp.json`) or Claude Desktop (`claude_desktop_config.json`), or prints the config. The config holds only the path of the key file and the exact version. For Claude Code it also adds the [hardening](#claude-code-hardening) deny rules to `~/.claude/settings.json` (backed up first; `setup --no-hardening` skips that); for Cursor and Claude Desktop it prints the equivalent advice.
 
-If an existing client config still holds the key inline (`OSWIKI_WALLET_KEY`), setup names that file and tells you how to move the key to a key file (choose "Import key" in step 1); oswiki-sign no longer starts with an inline key. Every file it changes is backed up first (`<file>.bak-<time>`), other MCP servers and settings are kept, and an existing key file is only replaced if you confirm it (it is then moved to `key.bak-<time>`). Run setup again to change anything; it keeps your wallet. Colors are off with `NO_COLOR` or when the output is not a terminal. `npx -y @oswikixyz/sign@0.2.4 setup --help` shows the steps. To do everything by hand instead, see [Manual setup](#manual-setup).
+If an existing client config still holds the key inline (`OSWIKI_WALLET_KEY`), setup names that file and tells you how to move the key to a key file (choose "Import key" in step 1); oswiki-sign no longer starts with an inline key. Every file it changes is backed up first (`<file>.bak-<time>`), other MCP servers and settings are kept, and an existing key file is only replaced if you confirm it (it is then moved to `key.bak-<time>`). Run setup again to change anything; it keeps your wallet. Colors are off with `NO_COLOR` or when the output is not a terminal. `npx -y @oswikixyz/sign setup --help` shows the steps. To do everything by hand instead, see [Manual setup](#manual-setup).
+
+### Update
+
+The client config pins the exact version on purpose: code that holds your key never updates by itself. When `wallet_status` or the server log says `Update available`, run in a terminal:
+
+```sh
+npx -y @oswikixyz/sign@latest update
+```
+
+It finds the oswiki-sign entry of Claude Code (user scope), Cursor and Claude Desktop, changes only the pinned version (env and settings stay as they are, files are backed up first), checks that the new version starts, and tells you which apps to restart. No prompts. The update check asks registry.npmjs.org at most once a day; `OSWIKI_UPDATE_CHECK=0` turns it off.
 
 ## How it works
 
@@ -30,9 +40,24 @@ Tools: `wallet_status`, `my_listings`, `my_offers`, `preview_listing`, `preview_
 
 `wallet_status` lists every setting with its exact env name, current value and source (setup/env or chat), and how to change it.
 
+### One-call trades
+
+The preview tools do their own lookups, so "buy the cheapest Arbinaut" is one `preview_buy` and one `execute`. Wherever a tool takes `contract`, it also takes `collection`: a slug, an exact collection name or a `0x` address, resolved on the given chain. A name is accepted only when it exactly matches a verified collection; anything else is refused with the closest candidates. The card shows the collection name and its verified mark. Exact ids keep working everywhere.
+
+| Tool | One-call form |
+| --- | --- |
+| `preview_buy` | `{ chainId, collection, count (1-20), maxPrice? }`: the cheapest buyable OSWiki or OpenSea listings, skipping your own, unsupported marketplaces and anything above `maxPrice` (checked again against the verified order). The card says when fewer were found. |
+| `preview_listing` | items with `collection` instead of `contract`, or `{ collection, count \| all: true }` to list ERC-721 tokens this wallet holds (index rows are confirmed with `ownerOf`; tokens you already list are skipped). Price: `price`, or `floorPct` (e.g. `110` = 10% above the live floor). The card shows the math, e.g. `floor 0.048 APE x 110% = 0.0528 APE`; with no floor it refuses. The floor guard and the below-floor budget apply to the computed price. |
+| `preview_offer` | `collection` instead of `contract`. |
+| `preview_accept_offer` | `{ chainId, collection \| contract, tokenId, best: true }`: the best OSWiki offer for the token (item or collection offer, whichever pays more, never your own). |
+| `preview_cancel` | `{ chainId, all: true }` or `{ chainId, collection }`, with `listings` / `offers` (both default `true`): your open OSWiki orders. |
+| `preview_transfer` | items with `collection` + `tokenId`, or `collections: [{ collection, count \| all: true }]` to send held ERC-721 tokens. The recipient rules do not change. |
+
+While oswiki-sign waits for your approval in its dialog or on the browser page, it sends MCP progress notifications every 10 seconds when the client asked for them, so clients that reset their timeout on progress keep waiting.
+
 ### Changing limits from the chat
 
-`update_limits` changes the per-buy, daily, daily send, daily sell and below-floor caps, the floor guard, trades and cancels per day, dry run, the confirmation mode and the collection allow/block lists (`0x` addresses only). Every change, tighter or looser, is shown to you as old -> new in oswiki-sign's own dialog and applies only after you approve it there, in every confirmation mode. It then takes effect at once, no restart. Clients that cannot show the dialog cannot change settings this way; run setup again instead.
+`update_limits` changes the per-buy, daily, daily send, daily sell and below-floor caps, the floor guard, trades and cancels per day, dry run, the confirmation mode and the collection allow/block lists (`0x` addresses only). Every change, tighter or looser, is shown to you as old -> new in oswiki-sign's own dialog and applies only after you approve it there, in every confirmation mode. It then takes effect at once, no restart. Clients that cannot show the dialog get the [browser approval page](#browser-approval-page) instead; only with that switched off (`OSWIKI_BROWSER_APPROVAL=0`) do you need to run setup again.
 
 Approved changes are saved in `~/.oswiki-sign/settings.json`, signed with a key derived from your wallet key, and win over the setup/env values. A file that fails that check (edited by hand, or from another wallet) is ignored with a warning. Re-running setup shows the chat changes and offers to reset them.
 
@@ -40,9 +65,17 @@ Approved changes are saved in `~/.oswiki-sign/settings.json`, signed with a key 
 
 ### Confirmation dialog
 
-When the AI calls `execute`, oswiki-sign itself opens a confirmation dialog in your client showing the exact trade. Only ticking "Sign and send this trade" sends it; the AI cannot answer this dialog. Claude Code shows the dialog automatically. If your client cannot show it, trades are refused unless you set `OSWIKI_CONFIRM_MODE=ai` (less safe: the AI's word then counts as your confirmation).
+When the AI calls `execute`, oswiki-sign itself opens a confirmation dialog in your client showing the exact trade. Only ticking "Sign and send this trade" sends it; the AI cannot answer this dialog. Claude Code shows the dialog automatically. If your client cannot show it (Claude Desktop and some Cursor versions), oswiki-sign opens the same approval as a page in your browser instead, see [Browser approval page](#browser-approval-page).
 
 `OSWIKI_CONFIRM_MODE=off` switches the dialog off on purpose, so the AI can trade on its own: for trades you asked for, or under a standing instruction such as "buy any Gimboz under 2,500 APE". The AI is told it may execute when you asked for the trade or a standing instruction covers it, must stay within the limits and must report every executed trade. Be honest with yourself about what this means: nothing stops a trade except your limits. A manipulated listing name, web page or message that the AI reads could make it trade, up to your per-buy, daily, sell, below-floor and trade-count limits, in the collections you allow. oswiki-sign says so at startup, in `wallet_status` and under every preview. All other limits stay exactly as you set them. Use it only with a small wallet, tight limits and, ideally, an allowlist. In Claude Code, `wallet_status` warns in this mode when the [hardening](#claude-code-hardening) deny rules are missing from `~/.claude/settings.json`.
+
+### Browser approval page
+
+For clients without the dialog (no MCP elicitation), oswiki-sign opens a one-time approval page in your default browser when the AI calls `execute`, `update_limits` or a send. It shows the exact card and an Approve and a Decline button; the tool call waits for your answer. The page is served by oswiki-sign itself on `127.0.0.1` only, under a random 128-bit link that works once and expires after 5 minutes (unanswered = declined). Approving takes a POST from that page with a second per-approval secret, and requests with a foreign `Host` or `Origin` are refused, so neither the AI nor another website can approve for you. The link is never shown to the AI. An Approve that comes less than a second after the page was opened is refused (click it again). If another program on this computer opened and approved the link before your browser did, your browser shows a warning instead of the approval page; for that, the local server keeps answering an approved link for 10 minutes, otherwise it stops as soon as no approval is open. If the AI client cancels the tool call while the page is open, the approval is declined. If the browser cannot be opened, the approval is declined.
+
+This page does not protect against an AI agent that has its own shell or terminal on this computer, unless that agent is sandboxed with access to localhost blocked: such an agent can open the page and approve it itself. The key file has the same limit, since an agent that can run commands as you can read it.
+
+`OSWIKI_BROWSER_APPROVAL=0` switches the page off: then clients without the dialog cannot send or change settings from the chat, and trades are refused unless you set `OSWIKI_CONFIRM_MODE=ai` (less safe: the AI's word then counts as your confirmation).
 
 ### Selling limits
 
@@ -57,7 +90,7 @@ Every listing and offer preview shows what both budgets have left after it; `wal
 
 `preview_transfer` sends NFTs and funds from the trading wallet to one other wallet on one chain, in one approval: any number of NFTs (up to 50; ERC-721, and ERC-1155 with an amount), ETH/APE and WETH/WAPE. ERC-721 tokens go one `safeTransferFrom` each, ERC-1155 ids of one contract go in one `safeBatchTransferFrom` (or `safeTransferFrom` for a single id); the transactions are sent one after another with the usual pending-transaction safety.
 
-- **Always your approval.** Every send is shown to you in oswiki-sign's own dialog (chain, every item and amount, the full recipient address, its ENS name and any warnings) and only goes out when you approve it there. This holds in every confirmation mode, also with `OSWIKI_CONFIRM_MODE=off` or `ai`. Clients that cannot show the dialog cannot send; send from your wallet app instead. The AI is told to send only to an address or ENS name you gave it yourself.
+- **Always your approval.** Every send is shown to you in oswiki-sign's own dialog (chain, every item and amount, the full recipient address, its ENS name and any warnings) and only goes out when you approve it there. This holds in every confirmation mode, also with `OSWIKI_CONFIRM_MODE=off` or `ai`. Clients that cannot show the dialog use the [browser approval page](#browser-approval-page); with that switched off they cannot send. The AI is told to send only to an address or ENS name you gave it yourself.
 - **Recipient checks.** The recipient is a full `0x` address or an ENS name. A mixed-case address must pass its EIP-55 checksum (all-lowercase and all-uppercase are accepted). An ENS name is resolved twice, independently: through your Ethereum RPC and through the OSWiki API. Both must agree, or the name is refused; when the OSWiki API is unreachable, ENS names are refused and you are asked for the `0x` address. On ApeChain, a name's own ApeChain address (ENSIP-11, coin type 2147516787) is used when it is set (both sources must agree on it); without one, its Ethereum address is used only when it is a plain wallet (no code on Ethereum or ApeChain), and a name that points to a smart wallet is refused, since that wallet may not exist on ApeChain. The zero and burn addresses, the token's own contract, the WETH/WAPE contract, marketplace contracts and the wallet itself are refused. On ApeChain, an address that is a smart contract on Ethereum but has no code on ApeChain is refused (an Ethereum smart wallet may not exist on ApeChain). A contract recipient gets a loud warning, and so does an address that has never sent a transaction or held funds on that chain, and a wallet with an EIP-7702 delegation on that chain (the card names the delegate: drained wallets often use sweeper delegations that forward everything they receive). A reverse ENS name is shown as set by the recipient, not as proof of identity; names with non-ASCII or punycode characters get a look-alike warning.
 - **Checked on-chain first.** Ownership (`ownerOf` / `balanceOf`) and balances are read from the chain, and every transfer is simulated. When a collection does not let you send a token (for example ERC721-C transfer rules), or the simulation reverts, the preview names each item it affects instead of sending the rest silently.
 - **Limits.** Sending ETH/WETH or APE/WAPE is off until you set a daily send limit (`OSWIKI_DAILY_MAX_SEND_ETH` / `OSWIKI_DAILY_MAX_SEND_APE`, in setup or with `update_limits` and your approval); sending NFTs works without one. Sent ETH plus WETH (APE plus WAPE) count toward that limit; every sent NFT counts as one trade toward `OSWIKI_MAX_TRADES_PER_DAY`; `OSWIKI_BLOCKED_COLLECTIONS` and `OSWIKI_ALLOWED_COLLECTIONS` apply. Gas limit caps per transaction: 90k (ERC-721), 80k (one ERC-1155 id), 60k + 40k per id (ERC-1155 batch), 70k (WETH/WAPE), 21k for ETH on Ethereum (so plain ETH to a contract wallet is refused: send WETH instead), 150k for APE on ApeChain.
@@ -79,7 +112,7 @@ When the collection has on-chain ERC-2981 royalty info, the royalty in a preview
 
 ## Manual setup
 
-[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.2.4`), never `latest` or a range, and update only on purpose.
+[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.2.5`), never `latest` or a range, and update only on purpose.
 
 ### 1. Store the key in a file
 
@@ -114,7 +147,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
   "mcpServers": {
     "oswiki-sign": {
       "command": "npx",
-      "args": ["-y", "@oswikixyz/sign@0.2.4"],
+      "args": ["-y", "@oswikixyz/sign@0.2.5"],
       "env": {
         "OSWIKI_WALLET_KEY_FILE": "/Users/you/.oswiki-sign/key",
         "OSWIKI_DRY_RUN": "1",
@@ -126,7 +159,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
 }
 ```
 
-If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.2.4"]`.
+If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.2.5"]`.
 
 Claude Code (user scope, so it is stored in `~/.claude.json` and not in a project):
 
@@ -136,15 +169,15 @@ claude mcp add --scope user oswiki-sign \
   -e OSWIKI_DRY_RUN=1 \
   -e OSWIKI_MAX_BUY_ETH=0.5 \
   -e OSWIKI_MAX_BUY_APE=500 \
-  -- npx -y @oswikixyz/sign@0.2.4
+  -- npx -y @oswikixyz/sign@0.2.5
 ```
 
-On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.2.4`.
+On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.2.5`.
 
 Check the setup from a terminal with the same environment variables set:
 
 ```sh
-npx -y @oswikixyz/sign@0.2.4 status
+npx -y @oswikixyz/sign@0.2.5 status
 ```
 
 When the dry-run previews look right, remove `OSWIKI_DRY_RUN` (or set it to `0`) and restart the client.
@@ -207,10 +240,13 @@ Every release is built and published by the [release workflow](.github/workflows
 | `OSWIKI_MAX_TRADES_PER_DAY` | 50 | Listed, bought, offered, accepted and sent items per UTC day (every item of a bulk execute counts). Counted in `~/.oswiki-sign/state.json`. |
 | `OSWIKI_ALLOWED_COLLECTIONS` | any | Comma-separated collection addresses; everything else is refused. See [Otherdeed](#otherdeed-has-two-contracts). |
 | `OSWIKI_BLOCKED_COLLECTIONS` | none | Comma-separated collection addresses; listing, buying, offers and accepting offers on them are refused in every confirmation mode. Cancelling always works. With both lists set, a collection must be allowed and not blocked. |
+| `OSWIKI_TRUSTED_COLLECTIONS` | none | Comma-separated collection addresses you trust although they are not verified. With `OSWIKI_CONFIRM_MODE=off`, a collection given by slug, name or address must be verified or on this list. Restricts nothing else. |
 | `OSWIKI_API_KEY` | none | Your oswiki.xyz API key (Account, Developer) for your own rate limit. |
 | `OSWIKI_RPC_URL_MAINNET` | `https://ethereum-rpc.publicnode.com` | Ethereum RPC (https). |
 | `OSWIKI_RPC_URL_APECHAIN` | `https://rpc.apechain.com/http` | ApeChain RPC (https). |
-| `OSWIKI_CONFIRM_MODE` | `human` | `human`: every `execute` must be approved by you in oswiki-sign's own confirmation dialog; clients without that dialog cannot execute. `ai`: only for clients without the dialog, where the AI's word counts as your confirmation; clients that have the dialog still show it in `ai` mode, so it does not stop approvals. `off` (autonomous): never a dialog, the AI may trade on its own within your limits; this is the mode for "I do not want to approve every trade" (a manipulated text could trigger a trade within your limits; see [Confirmation dialog](#confirmation-dialog)). `ai` and `off` are announced loudly at startup, in previews and in `wallet_status`. |
+| `OSWIKI_CONFIRM_MODE` | `human` | `human`: every `execute` must be approved by you in oswiki-sign's own confirmation dialog, or on its [browser approval page](#browser-approval-page) when the client has no dialog. `ai`: only for clients without the dialog and with `OSWIKI_BROWSER_APPROVAL=0`, where the AI's word counts as your confirmation; clients that have the dialog still show it in `ai` mode, so it does not stop approvals. `off` (autonomous): never a dialog, the AI may trade on its own within your limits; this is the mode for "I do not want to approve every trade" (a manipulated text could trigger a trade within your limits; see [Confirmation dialog](#confirmation-dialog)). `ai` and `off` are announced loudly at startup, in previews and in `wallet_status`. |
+| `OSWIKI_BROWSER_APPROVAL` | on | `0`: no [browser approval page](#browser-approval-page) for clients without the dialog. |
+| `OSWIKI_UPDATE_CHECK` | on | `0`: no daily check against registry.npmjs.org for a newer version (shown at startup and in `wallet_status`). |
 | `OSWIKI_DAILY_MAX_ETH` | 3x `OSWIKI_MAX_BUY_ETH` | Total ETH that buys plus new offers may use per UTC day on Ethereum. |
 | `OSWIKI_DAILY_MAX_APE` | 3x `OSWIKI_MAX_BUY_APE` | Same on ApeChain, in APE. |
 | `OSWIKI_DAILY_MAX_BELOW_FLOOR_ETH` | `OSWIKI_MAX_BUY_ETH`, else 0 | Most ETH per UTC day that listings and accepted offers may give up below the floor on Ethereum (floor minus price per item, the full price without a floor). `0` refuses every sale below the floor. See [Selling limits](#selling-limits). |
@@ -245,7 +281,7 @@ OSWIKI_ALLOWED_COLLECTIONS=0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258,0x790b2cf2
 - **Set the max-buy limits.** Buys and offers stay off on a chain until its `OSWIKI_MAX_BUY_*` is set; pick the most you would ever spend in one trade.
 - **Dry run to try it out.** Try a listing, an offer and a buy with `OSWIKI_DRY_RUN=1` and read the previews.
 - **Never paste the key into a chat.** oswiki-sign never asks for it, and the AI must not either.
-- **Read every preview.** Nothing happens until you approve the trade in the confirmation dialog (unless you turned it off).
+- **Read every preview.** Nothing happens until you approve the trade in the confirmation dialog or browser approval page (unless you turned confirmation off).
 - **Confirmation off means the AI trades alone.** With `OSWIKI_CONFIRM_MODE=off` your limits are the only brake: keep the wallet small, the caps tight and an allowlist set.
 - **Pin the exact version.** Never run an unpinned or "latest" oswiki-sign.
 - What oswiki-sign enforces in code, whatever the AI or the API say:
@@ -255,8 +291,8 @@ OSWIKI_ALLOWED_COLLECTIONS=0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258,0x790b2cf2
   - every send to another wallet needs your approval in oswiki-sign's own dialog, in every confirmation mode;
   - the Seaport counter is always read from the chain (never assumed), purchases are re-encoded locally and must match the listing's own hash and exact price, and every transaction is simulated first;
   - prices are explicit numbers: no listing at 0, no guessed floor;
-  - every `execute` needs your confirmation in oswiki-sign's own dialog (unless you chose `OSWIKI_CONFIRM_MODE=ai` on a client without the dialog, or `off`);
-  - every setting change from the chat needs your approval in that dialog, in every mode;
+  - every `execute` needs your confirmation in oswiki-sign's own dialog or browser approval page (unless you chose `OSWIKI_CONFIRM_MODE=ai` on a client without the dialog and with `OSWIKI_BROWSER_APPROVAL=0`, or `off`);
+  - every setting change from the chat needs your approval in that dialog or page, in every mode;
   - blocked collections are refused in every mode; the allowlist, if set, too;
   - the limits above, daily value caps per chain (buys and offers, sends, value sold, value given up below the floor), gas limit and fee caps per transaction, and no resend while an earlier transaction may still land;
   - the key is read only from a key file, never from an inline `OSWIKI_WALLET_KEY`;

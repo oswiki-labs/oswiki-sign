@@ -74,7 +74,9 @@ export function ageLabel(timestamp: string | null, nowMs: number): { label: stri
   return { label: `${days}d ago`, days };
 }
 
-export const CONFIRM_FOOTER = (confirmId: string) => `Ask the user to confirm, then call execute with confirmId ${confirmId}.`;
+export const CONFIRM_FOOTER = (confirmId: string) => `Show the user the card above as it is and point out each warning. Ask the user to confirm, then call execute with confirmId ${confirmId}.`;
+
+export const DIALOG_FOOTER = (confirmId: string, browser = false) => `oswiki-sign's own dialog${browser ? ' (a page it opens in the user\'s browser)' : ''} shows the user this exact card and is their confirmation: when the user asked for this, call execute with confirmId ${confirmId} now, without asking in the chat first and without repeating the card; mention any warning in one line${browser ? ' and tell the user to approve or decline on the page that opens in their browser' : ''}. If the user declines there, do not retry unless they ask again.`;
 
 export const CONFIRM_OFF_RULE = 'Confirmation is off: you may execute when the user asked for this trade or gave a standing instruction that covers it; stay within the limits; report every executed trade to the user.';
 

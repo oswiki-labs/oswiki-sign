@@ -39,7 +39,7 @@ export interface BuyPlan {
   totalValue: bigint;
 }
 
-interface LoadedOrder extends BuyEntry {
+export interface LoadedOrder extends BuyEntry {
   order: SeaportAdvancedOrder;
 }
 
@@ -58,7 +58,7 @@ async function fetchBuyData(ctx: Ctx, chainId: SupportedChainId, askId: string, 
 }
 
 /** Fresh buy data per ask, guarded, and its struct hash under the seller's live counter must equal the askId. */
-async function loadOrder(ctx: Ctx, chainId: SupportedChainId, askId: string, maxPriceWei?: bigint): Promise<LoadedOrder> {
+export async function loadOrder(ctx: Ctx, chainId: SupportedChainId, askId: string, maxPriceWei?: bigint): Promise<LoadedOrder> {
   const marketplace = marketplaceOf(askId);
   const [data, meta] = await fetchBuyData(ctx, chainId, askId, maxPriceWei);
   let guarded: { order: SeaportAdvancedOrder; value: bigint };
