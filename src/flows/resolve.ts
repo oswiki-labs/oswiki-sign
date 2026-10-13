@@ -7,7 +7,7 @@ import { native, parsePositiveAmount } from '../format.js';
 import { addCardText, addCardWarning, chainLabel, shortHex, type CardPreview } from '../format-card.js';
 import { MAX_LISTINGS_PER_REQUEST } from '../seaport/listing.js';
 import { previewAcceptOffer, type AcceptPlan } from './accept.js';
-import { MAX_BUY_ITEMS, previewBuy, type BuyPlan } from './buy.js';
+import { MARKETPLACE_NAME, MAX_BUY_ITEMS, previewBuy, type BuyPlan } from './buy.js';
 import { MAX_CANCELS, previewCancel, type CancelPlan } from './cancel.js';
 import { ADDRESS_RE, assertBuyingEnabled, assertCollectionAllowed, chainOf, floorToWei, GuardError, me, readIsErc1155, TOKEN_ID_RE, type Ctx } from './common.js';
 import { previewListing, type ListingInput, type ListingPlan } from './listing.js';
@@ -217,7 +217,7 @@ export async function previewBuyAuto(ctx: Ctx, input: BuyInput): Promise<CardPre
       return false;
     }
     const priceWei = floorToWei(row.price);
-    if (!isBuyableRow(row) || priceWei === null) {
+    if (!isBuyableRow(row, chainId) || priceWei === null) {
       unsupported++;
       return false;
     }
@@ -313,8 +313,6 @@ function noFloorText(name: string, floor: FloorReference): string {
   return `${name} has no floor right now (${why}), so floorPct cannot set a price; oswiki-sign never guesses one. Nothing was signed. Ask the user for an explicit price.`;
 }
 
-const MARKET_NAME: Record<string, string> = { oswiki: 'OSWiki', opensea: 'OpenSea' };
-
 interface PricingFloor {
   wei: bigint;
   name: string;
@@ -329,7 +327,7 @@ async function pricingFloor(ctx: Ctx, chainId: SupportedChainId, contract: strin
   const name = cleanName(group.infos[0]?.name) || knownName || shortHex(contract);
   const verified = await fetchVerifiedFloor(ctx, chainId, group);
   const listing = verified.listing;
-  const source = listing ? `Floor set by ${MARKET_NAME[listing.marketplace] ?? listing.marketplace} listing ${shortHex(listing.askId.replace(/^oswiki-/, ''))} (#${listing.tokenId}), checked fillable by oswiki-sign.` : null;
+  const source = listing ? `Floor set by ${MARKETPLACE_NAME[listing.marketplace]} listing ${shortHex(listing.askId)} (#${listing.tokenId}), checked fillable by oswiki-sign.` : null;
   if (verified.problem === null && verified.wei !== null) return { wei: verified.wei, name, label: 'verified floor', source, warning: null };
   if (offMode) {
     throw new GuardError(`floorPct for ${name} needs a floor oswiki-sign can verify, but ${verified.problem}. With confirmation off nobody reviews this price, so nothing was signed. Ask the user for an explicit price.`);

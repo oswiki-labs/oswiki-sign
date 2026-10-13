@@ -61,7 +61,7 @@ function assertOwnOffer(order: OrderComponents, plan: Pick<OfferPlan, 'chainId' 
 }
 
 /** Own active OSWiki offers from /v1/bids, null when they cannot be added up. */
-async function ownOpenOffersWei(ctx: Ctx, chainId: SupportedChainId, maker: Address): Promise<bigint | null> {
+export async function ownOpenOffersWei(ctx: Ctx, chainId: SupportedChainId, maker: Address): Promise<bigint | null> {
   try {
     const bids = await ctx.api.allMakerBids(chainId, maker);
     let sum = 0n;

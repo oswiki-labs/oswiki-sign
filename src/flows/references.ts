@@ -1,9 +1,9 @@
 import { NFT_ABI, SEAPORT_GET_ORDER_STATUS_ABI } from '../abi.js';
 import type { CollectionInfo, CollectionListing, SaleReference, TokenReference } from '../api.js';
-import { MAINNET_ID, NATIVE_SYMBOL, OPENSEA_CONDUIT_ADDRESS, OPENSEA_CONDUIT_KEY, OTHERDEED_CONTRACTS, SEAPORT_ADDRESS, WRAPPED_SYMBOL, ZERO_ADDRESS, ZERO_BYTES32, type SupportedChainId } from '../constants.js';
+import { MAINNET_ID, NATIVE_SYMBOL, OPENSEA_CONDUIT_ADDRESS, OPENSEA_CONDUIT_KEY, OTHERDEED_CONTRACTS, SEAPORT_ADDRESS, WRAPPED_NATIVE, WRAPPED_SYMBOL, ZERO_ADDRESS, ZERO_BYTES32, type SupportedChainId } from '../constants.js';
 import { ageLabel, native, trimAmount } from '../format.js';
 import { verifySeaportOrderSignature } from '../seaport/sign.js';
-import { BUY_ASK_ID_RE, loadOrder, type BuyMarketplace } from './buy.js';
+import { BUY_ASK_ID_RE, loadOrder, marketplaceOf, type BuyMarketplace } from './buy.js';
 import type { Ctx } from './common.js';
 import { floorToWei, me } from './common.js';
 
@@ -70,9 +70,17 @@ export const SALES_WINDOW_DAYS = 30;
 export const SALES_MIN_COUNT = 3;
 export const FLOOR_MIN_MEDIAN_PCT = 70;
 
-export function isBuyableRow(row: CollectionListing): boolean {
-  const marketOk = (row.marketplace === 'oswiki' && row.askId.startsWith('oswiki-')) || (row.marketplace === 'opensea' && !row.askId.startsWith('oswiki-'));
-  return row.buyable && marketOk && BUY_ASK_ID_RE.test(row.askId) && (row.currencyContract === null || row.currencyContract === ZERO_ADDRESS);
+/** Gondi listings may be priced in wrapped native; the buy flow approves exactly what Seaport pulls. */
+export function isBuyableRow(row: CollectionListing, chainId: SupportedChainId): boolean {
+  if (!row.buyable || !BUY_ASK_ID_RE.test(row.askId)) return false;
+  let market: BuyMarketplace;
+  try {
+    market = marketplaceOf(row.askId);
+  } catch {
+    return false;
+  }
+  if (row.marketplace !== market) return false;
+  return row.currencyContract === null || row.currencyContract === ZERO_ADDRESS || (market === 'gondi' && row.currencyContract === WRAPPED_NATIVE[chainId]);
 }
 
 export interface FloorListing {
@@ -142,7 +150,7 @@ export async function fetchVerifiedFloor(ctx: Ctx, chainId: SupportedChainId, gr
   const seen = new Set<string>();
   const candidates = listed.flat()
     .filter((row) => {
-      if (row.maker === wallet || !isBuyableRow(row) || seen.has(row.askId)) return false;
+      if (row.maker === wallet || !isBuyableRow(row, chainId) || seen.has(row.askId)) return false;
       seen.add(row.askId);
       return true;
     })

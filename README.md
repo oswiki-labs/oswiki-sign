@@ -46,7 +46,7 @@ The preview tools do their own lookups, so "buy the cheapest Arbinaut" is one `p
 
 | Tool | One-call form |
 | --- | --- |
-| `preview_buy` | `{ chainId, collection, count (1-20), maxPrice? }`: the cheapest buyable OSWiki or OpenSea listings, skipping your own, unsupported marketplaces and anything above `maxPrice` (checked again against the verified order). The card says when fewer were found. |
+| `preview_buy` | `{ chainId, collection, count (1-20), maxPrice? }`: the cheapest buyable OSWiki, Gondi or OpenSea listings, skipping your own, unsupported marketplaces and anything above `maxPrice` (checked again against the verified order). The card says when fewer were found. |
 | `preview_listing` | items with `collection` instead of `contract`, or `{ collection, count \| all: true }` to list ERC-721 tokens this wallet holds (index rows are confirmed with `ownerOf`; tokens you already list are skipped). Price: `price`, or `floorPct` (e.g. `110` = 10% above the live floor). The card shows the math, e.g. `floor 0.048 APE x 110% = 0.0528 APE`; with no floor it refuses. The floor guard and the below-floor budget apply to the computed price. |
 | `preview_offer` | `collection` instead of `contract`. |
 | `preview_accept_offer` | `{ chainId, collection \| contract, tokenId, best: true }`: the best OSWiki offer for the token (item or collection offer, whichever pays more, never your own). |
@@ -112,7 +112,7 @@ When the collection has on-chain ERC-2981 royalty info, the royalty in a preview
 
 ## Manual setup
 
-[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.2.5`), never `latest` or a range, and update only on purpose.
+[Quick setup](#quick-setup) does all of this for you. oswiki-sign is published on npm as [`@oswikixyz/sign`](https://www.npmjs.com/package/@oswikixyz/sign). It needs Node.js 20 or newer. Always pin the exact version (`@oswikixyz/sign@0.2.6`), never `latest` or a range, and update only on purpose.
 
 ### 1. Store the key in a file
 
@@ -147,7 +147,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
   "mcpServers": {
     "oswiki-sign": {
       "command": "npx",
-      "args": ["-y", "@oswikixyz/sign@0.2.5"],
+      "args": ["-y", "@oswikixyz/sign@0.2.6"],
       "env": {
         "OSWIKI_WALLET_KEY_FILE": "/Users/you/.oswiki-sign/key",
         "OSWIKI_DRY_RUN": "1",
@@ -159,7 +159,7 @@ Claude Desktop (`claude_desktop_config.json`) and Cursor (`~/.cursor/mcp.json`):
 }
 ```
 
-If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.2.5"]`.
+If your client on Windows cannot start `npx`, use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "@oswikixyz/sign@0.2.6"]`.
 
 Claude Code (user scope, so it is stored in `~/.claude.json` and not in a project):
 
@@ -169,15 +169,15 @@ claude mcp add --scope user oswiki-sign \
   -e OSWIKI_DRY_RUN=1 \
   -e OSWIKI_MAX_BUY_ETH=0.5 \
   -e OSWIKI_MAX_BUY_APE=500 \
-  -- npx -y @oswikixyz/sign@0.2.5
+  -- npx -y @oswikixyz/sign@0.2.6
 ```
 
-On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.2.5`.
+On native Windows, Claude Code needs `cmd /c` to start `npx`: end the command with `-- cmd /c npx -y @oswikixyz/sign@0.2.6`.
 
 Check the setup from a terminal with the same environment variables set:
 
 ```sh
-npx -y @oswikixyz/sign@0.2.5 status
+npx -y @oswikixyz/sign@0.2.6 status
 ```
 
 When the dry-run previews look right, remove `OSWIKI_DRY_RUN` (or set it to `0`) and restart the client.
@@ -286,6 +286,7 @@ OSWIKI_ALLOWED_COLLECTIONS=0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258,0x790b2cf2
 - **Pin the exact version.** Never run an unpinned or "latest" oswiki-sign.
 - What oswiki-sign enforces in code, whatever the AI or the API say:
   - only Seaport 1.6 and the OpenSea conduit; fee exactly 1% to the known OSWiki fee recipient of the chain; royalty at most 25%, and at most 10% when it is unverified;
+  - Gondi listings are bought only as plain Seaport 1.6 orders (zone 0, no conduit) for exactly the NFT asked for, with the 0.5% Gondi fee to Gondi's known fee recipient and every payment in one currency (ETH, or WETH through an exact approval to Seaport);
   - approvals only to the OpenSea conduit (your NFTs) and to Seaport for WETH/WAPE, for the exact amount, never unlimited;
   - transactions only to Seaport, WETH/WAPE, or `setApprovalForAll` on the collection being traded; Seaport buys deliver only to this wallet and never through a fulfiller conduit, and accepted offers pay only this wallet; transfers and plain value sends only to the one recipient you approved in the dialog;
   - every send to another wallet needs your approval in oswiki-sign's own dialog, in every confirmation mode;

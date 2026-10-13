@@ -120,9 +120,9 @@ export function assertOswikiSeaportOrder(data: BuyData, expected: OswikiOrderExp
   return { order: advanced, value };
 }
 
-/** askIds are the Seaport struct hash for OSWiki ('oswiki-0x...') orders. */
+/** askIds are the Seaport struct hash, bare (OpenSea) or prefixed 'oswiki-' / 'gondi-'. */
 export function orderHashFromAskId(askId: string | null | undefined): Hex | null {
-  const match = /^(?:oswiki-)?(0x[0-9a-fA-F]{64})$/.exec(askId ?? '');
+  const match = /^(?:(?:oswiki|gondi)-)?(0x[0-9a-fA-F]{64})$/.exec(askId ?? '');
   return match ? match[1]!.toLowerCase() as Hex : null;
 }
 
@@ -183,7 +183,7 @@ export interface FilledOrder {
   paid: bigint;
 }
 
-/** Per order hash: units of the expected NFT delivered and the native amount paid, as Seaport executed them. */
+/** Per order hash: units of the expected NFT delivered and the amount paid (native or wrapped), as Seaport executed them. */
 export function filledOrders(logs: Log[], nfts: ReadonlyMap<string, { token: Address; identifier: bigint }>): Map<string, FilledOrder> {
   const result = new Map<string, FilledOrder>();
   for (const log of parseEventLogs({ abi: SEAPORT_EVENTS_ABI, eventName: 'OrderFulfilled', logs })) {
@@ -194,7 +194,7 @@ export function filledOrders(logs: Log[], nfts: ReadonlyMap<string, { token: Add
     const received = log.args.offer
       .filter(item => item.token.toLowerCase() === nft.token.toLowerCase() && item.identifier === nft.identifier)
       .reduce((sum, item) => sum + item.amount, 0n);
-    const paid = log.args.consideration.filter(item => item.itemType === 0).reduce((sum, item) => sum + item.amount, 0n);
+    const paid = log.args.consideration.filter(item => item.itemType === 0 || item.itemType === 1).reduce((sum, item) => sum + item.amount, 0n);
     const prior = result.get(hash);
     result.set(hash, { received: (prior?.received ?? 0n) + received, paid: (prior?.paid ?? 0n) + paid });
   }

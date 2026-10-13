@@ -11,9 +11,9 @@ export function chainLabel(chainId: number): string {
   return chainId === 1 ? 'Ethereum' : chainId === 33139 ? 'ApeChain' : `chain ${chainId}`;
 }
 
-/** 0x1234…abcd for addresses, order hashes and "oswiki-0x…" ids. */
+/** 0x1234…abcd for addresses, order hashes and "oswiki-0x…" / "gondi-0x…" ids. */
 export function shortHex(value: string): string {
-  const match = /^(oswiki-)?(0x[0-9a-fA-F]+)$/.exec(value);
+  const match = /^((?:oswiki|gondi)-)?(0x[0-9a-fA-F]+)$/.exec(value);
   if (!match) return value.slice(0, 20);
   const hex = match[2]!.toLowerCase();
   return hex.length <= 12 ? hex : `${hex.slice(0, 6)}…${hex.slice(-4)}`;

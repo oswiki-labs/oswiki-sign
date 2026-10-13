@@ -40,4 +40,7 @@ export const DEFAULT_RPC: Record<SupportedChainId, string> = {
 
 export const API_BASE = 'https://api.oswiki.xyz';
 
+export const GONDI_FEE_RECIPIENT = '0x4169447a424ec645f8a24dccfd8328f714dd5562' as const;
+export const GONDI_FEE_BPS = 50;
+
 export const OTHERDEED_CONTRACTS: readonly string[] = ['0x34d85c9cdeb23fa97cb08333b511ac86e1c4e258', '0x790b2cf29ed4f310bf7641f013c65d4560d28371'];

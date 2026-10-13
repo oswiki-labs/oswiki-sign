@@ -60,7 +60,7 @@ export const SERVER_INSTRUCTIONS = serverInstructions('human');
 const chainId = z.union([z.literal(1), z.literal(33139)]).describe('1 = Ethereum, 33139 = ApeChain');
 const amount = z.union([z.string(), z.number()]);
 const orderId = z.string().describe('OSWiki order id, "oswiki-0x" + 64 hex');
-const askId = z.string().describe('askId to buy: "oswiki-0x" + 64 hex (OSWiki) or "0x" + 64 hex (OpenSea order hash)');
+const askId = z.string().describe('askId to buy: "oswiki-0x" + 64 hex (OSWiki), "gondi-0x" + 64 hex (Gondi) or "0x" + 64 hex (OpenSea order hash)');
 const allowNoFloor = z.boolean().optional().describe('only when the user explicitly confirmed listing/accepting without any floor reference');
 const collectionRef = z.string().min(1).max(200).describe('Collection slug, exact name or 0x address, resolved on this chain (a name only when it exactly matches a verified collection); use instead of contract');
 const contractRef = z.string().describe('Collection contract address (0x...); or pass collection instead');
@@ -93,8 +93,8 @@ const SCHEMAS = {
   }),
   preview_buy: z.strictObject({
     chainId,
-    askIds: z.array(askId).min(1).max(20).optional().describe('Exact OSWiki or OpenSea askIds to buy'),
-    collection: collectionRef.optional().describe('Instead of askIds: buy the cheapest buyable listings (OSWiki or OpenSea) of this collection'),
+    askIds: z.array(askId).min(1).max(20).optional().describe('Exact OSWiki, Gondi or OpenSea askIds to buy'),
+    collection: collectionRef.optional().describe('Instead of askIds: buy the cheapest buyable listings (OSWiki, Gondi or OpenSea) of this collection'),
     count: z.number().int().min(1).max(20).optional().describe('With collection: how many of the cheapest listings (default 1)'),
     maxPrice: amount.optional().describe('With collection: skip listings above this price per item in ETH/APE; only a number the user gave'),
   }),
@@ -198,7 +198,7 @@ function descriptions(mode: ConfirmMode): Record<ToolName, string> {
       'If the user asks to list "at the <trait> floor" (e.g. "at the Otherdeed Chaos floor"), floorPct does not apply: look the number up with the hosted oswiki tools first. If there is no listing for it (no floor, or a floor of 0), do NOT guess, do NOT use 0 and do NOT fall back to the collection floor or any lower reference: a missing trait floor usually means the trait is rare and worth more. Tell the user there is no floor, offer context from the hosted oswiki tools (recent sales of that trait, rarity), and ask them for a price.',
       off ? `For pricing advice use the hosted oswiki tools. ${OFF_STEP}` : 'For pricing advice use the hosted oswiki tools. Show the whole preview to the user, then ask them to confirm before calling execute.',
     ].join(' '),
-    preview_buy: `Step 1 of buying up to 20 OSWiki or OpenSea listings: exact askIds (OpenSea askId = the bare 0x order hash), or in one call { collection, count, maxPrice? } and oswiki-sign picks the cheapest buyable listings itself (no need to look up askIds first; skips your own and unsupported ones, says so when fewer are found; maxPrice only when the user gave one). Re-checks each order against the chain, simulates the purchase and shows the total and the network fee. Nothing is sent. ${confirm}`,
+    preview_buy: `Step 1 of buying up to 20 OSWiki, Gondi or OpenSea listings: exact askIds (OpenSea askId = the bare 0x order hash), or in one call { collection, count, maxPrice? } and oswiki-sign picks the cheapest buyable listings itself (no need to look up askIds first; skips your own and unsupported ones, says so when fewer are found; maxPrice only when the user gave one). Re-checks each order against the chain, simulates the purchase and shows the total and the network fee. Nothing is sent. ${confirm}`,
     preview_cancel: `Step 1 of cancelling this wallet's OSWiki listings (askIds, incl. their linked OpenSea listings), offers (bidIds) and signed orders the API rejected (orders) on-chain; or in one call { all: true } or { collection }, with listings or offers false to keep that side, and oswiki-sign collects the open orders itself. Shows the network fee. Nothing is sent. ${confirm}`,
     preview_offer: `Step 1 of making an offer in WETH (Ethereum) or WAPE (ApeChain): an item offer (with tokenId) or collection offers (without tokenId, quantity up to 50); takes contract or collection (slug, exact name or 0x). Shows the wrap and exact-amount approval needed. Nothing is signed. ${confirm}`,
     preview_accept_offer: `Step 1 of accepting an OSWiki offer for a token this wallet holds: an exact bidId, or { collection | contract, tokenId, best: true } for the best OSWiki offer (item or collection offer, whichever pays more) without looking up bidIds first. Shows what you receive after fee and royalty. Nothing is sent. ${confirm}`,
