@@ -82,7 +82,7 @@ export function createChains(config: Config, account: PrivateKeyAccount, options
   };
 }
 
-const EXPLORER_TX: Record<SupportedChainId, string> = { [MAINNET_ID]: 'etherscan.io/tx/', [APECHAIN_ID]: 'explorer.apechain.com/tx/' };
+const EXPLORER_TX: Record<SupportedChainId, string> = { [MAINNET_ID]: 'etherscan.io/tx/', [APECHAIN_ID]: 'apescan.io/tx/' };
 const CHAIN_LABEL: Record<SupportedChainId, string> = { [MAINNET_ID]: 'Ethereum', [APECHAIN_ID]: 'ApeChain' };
 
 /** The transaction was (or may have been) broadcast: it can still land, so callers must never report it as not sent. */
