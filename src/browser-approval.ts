@@ -297,7 +297,8 @@ function closedPage(): string {
 function approvalPage(token: string, approval: Approval): string {
   const csrf = `<input type="hidden" name="csrf" value="${approval.csrf}">`;
   return page(approval.title, [
-    '<p class="lead">oswiki-sign asks you to approve exactly this. Only you can answer here; the AI cannot.</p>',
+    '<p class="lead">oswiki-sign asks you to approve exactly this. Read it and answer it yourself.</p>',
+    '<p class="lead">An AI tool that controls your browser or this computer could press these buttons too. Do not leave this page to such a tool, and decline anything you did not ask for.</p>',
     `<pre>${escapeHtml(approval.message)}</pre>`,
     '<div class="actions">',
     `<form method="post" action="/a/${token}/approve">${csrf}<button class="approve" type="submit">Approve</button></form>`,

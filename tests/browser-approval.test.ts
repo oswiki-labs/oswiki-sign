@@ -97,6 +97,8 @@ describe('browser approval page', () => {
     expect(page.headers['cache-control']).toBe('no-store');
     expect(page.body).toContain('Buy for the total shown');
     expect(page.body).toContain('Total 1 ETH');
+    expect(page.body).toContain('An AI tool that controls your browser or this computer could press these buttons too.');
+    expect(page.body).not.toMatch(/AI cannot|only you can/i);
     expect(page.body).not.toMatch(/<script|<link|<img|https?:\/\/(?!127)/i);
 
     expect((await send(`${url}/approve`, { method: 'POST', body: `csrf=${csrf}`, cookie })).status).toBe(200);
