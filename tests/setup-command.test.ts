@@ -19,6 +19,7 @@ import {
   box,
   useColor,
   runSetup,
+  scrubKeyBackups,
   selfTestServer,
   type Exec,
   type SetupDeps,
@@ -548,6 +549,65 @@ describe('setup: other clients and old configs', () => {
     const written = JSON.parse(readFileSync(cursorPath, 'utf8')) as { mcpServers: Record<string, { env: Record<string, string> }> };
     expect(written.mcpServers['oswiki-sign']!.env.OSWIKI_WALLET_KEY).toBeUndefined();
     expect(written.mcpServers['oswiki-sign']!.env.OSWIKI_WALLET_KEY_FILE).toBe(keyFilePath(homedir()));
+  });
+});
+
+describe('setup: backups of configs that held the key inline', () => {
+  it('keeps the key out of the backup it makes and takes it out of older backups, leaving everything else as it was', async () => {
+    const cursorPath = homeFile('.cursor', 'mcp.json');
+    mkdirSync(join(homedir(), '.cursor'), { recursive: true });
+    const inline = JSON.stringify({
+      theme: 'x',
+      mcpServers: {
+        other: { command: 'other', env: { OTHER_SECRET: 'keep' } },
+        'oswiki-sign': { command: 'npx', env: { OSWIKI_WALLET_KEY: TEST_KEY, OSWIKI_DRY_RUN: '1' } },
+      },
+    });
+    writeFileSync(cursorPath, inline);
+    const oldBackup = `${cursorPath}.bak-2026-09-01T08-00-00-000Z`;
+    writeFileSync(oldBackup, inline);
+    const folderBackup = homeFile('.claude.json.bak-2026-09-02T08-00-00-000Z');
+    writeFileSync(folderBackup, JSON.stringify({ projects: { '/work': { mcpServers: { 'oswiki-sign': { command: 'npx', env: { OSWIKI_WALLET_KEY: TEST_KEY } } } } } }));
+    const keyFileBackup = homeFile('.claude.json.bak-2026-09-03T08-00-00-000Z');
+    const keyFileConfig = JSON.stringify({ mcpServers: { 'oswiki-sign': { command: 'npx', env: { OSWIKI_WALLET_KEY_FILE: '/k' } } } });
+    writeFileSync(keyFileBackup, keyFileConfig);
+    const brokenBackup = homeFile('.claude.json.bak-2026-09-04T08-00-00-000Z');
+    writeFileSync(brokenBackup, '{ "OSWIKI_WALLET_KEY" not json');
+
+    const h = harness(['', '', '', '', '', '', '', '', '', '2', '']);
+    expect(await runSetup([], h.deps)).toBe(0);
+
+    const fresh = readFileSync(`${cursorPath}.bak-2026-10-11T12-00-00-000Z`, 'utf8');
+    for (const text of [fresh, readFileSync(oldBackup, 'utf8'), readFileSync(folderBackup, 'utf8')]) expectNoKey(text, TEST_KEY);
+    for (const text of [fresh, readFileSync(oldBackup, 'utf8')]) {
+      const backup = JSON.parse(text) as { theme: string; mcpServers: Record<string, unknown> };
+      expect(backup.theme).toBe('x');
+      expect(backup.mcpServers.other).toEqual({ command: 'other', env: { OTHER_SECRET: 'keep' } });
+      expect(backup.mcpServers['oswiki-sign']).toEqual({ command: 'npx', env: { OSWIKI_DRY_RUN: '1' } });
+    }
+    expect(JSON.parse(readFileSync(folderBackup, 'utf8'))).toEqual({ projects: { '/work': { mcpServers: { 'oswiki-sign': { command: 'npx', env: {} } } } } });
+    expect(readFileSync(keyFileBackup, 'utf8')).toBe(keyFileConfig);
+    expect(readFileSync(brokenBackup, 'utf8')).toBe('{ "OSWIKI_WALLET_KEY" not json');
+
+    const out = h.output();
+    expect(out).toContain('Removed the private key from 2 old config backups:');
+    expect(out).toContain(oldBackup);
+    expect(out).toContain(folderBackup);
+    expect(out).not.toContain(keyFileBackup);
+    expectNoKey(out, TEST_KEY);
+    expect(scrubKeyBackups(h.deps)).toEqual([]);
+  });
+
+  it('copies a config without an inline key byte for byte', async () => {
+    const cursorPath = homeFile('.cursor', 'mcp.json');
+    mkdirSync(join(homedir(), '.cursor'), { recursive: true });
+    const original = '{"mcpServers":{"oswiki-sign":{"command":"npx","env":{"OSWIKI_WALLET_KEY_FILE":"/k"}}},  "spacing":   "kept"}';
+    writeFileSync(cursorPath, original);
+    const h = harness(['', '', '', '', '', '', '', '', '', '2', '']);
+    expect(await runSetup([], h.deps)).toBe(0);
+
+    expect(readFileSync(`${cursorPath}.bak-2026-10-11T12-00-00-000Z`, 'utf8')).toBe(original);
+    expect(h.output()).not.toContain('Removed the private key');
   });
 });
 

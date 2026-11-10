@@ -149,6 +149,19 @@ describe('update', () => {
     expect(h.output()).toContain('claude mcp add failed; the previous entry was put back.');
   });
 
+  it('takes the private key out of old config backups before anything else', async () => {
+    const backup = `${cursorConfigPath(home)}.bak-2026-09-01T08-00-00-000Z`;
+    mkdirSync(dirname(backup), { recursive: true });
+    writeFileSync(backup, JSON.stringify({ mcpServers: { 'oswiki-sign': { command: 'npx', env: { OSWIKI_WALLET_KEY: TEST_KEY } } } }));
+    const h = updateHarness();
+
+    expect(await runUpdate([], h.deps)).toBe(1);
+
+    expect(readFileSync(backup, 'utf8').toLowerCase()).not.toContain(TEST_KEY.slice(2, 34).toLowerCase());
+    expect(h.output()).toContain(`Removed the private key from 1 old config backup: ${backup}`);
+    expect(h.output().toLowerCase()).not.toContain(TEST_KEY.slice(2, 34).toLowerCase());
+  });
+
   it('explains the manual edit without printing env values when claude is missing', async () => {
     writeConfig(join(home, '.claude.json'), { mcpServers: { 'oswiki-sign': entry() } });
     const h = updateHarness();

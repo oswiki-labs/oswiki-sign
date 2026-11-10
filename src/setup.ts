@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, closeSync, copyFileSync, existsSync, fchmodSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, copyFileSync, existsSync, fchmodSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir, userInfo } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import type { Hex } from 'viem';
@@ -257,10 +257,77 @@ function readJsonObject(path: string, label: string): Json | null {
   return parsed as Json;
 }
 
+/** A copy to fall back on. The private key an old entry held inline never goes into it. */
 function backupFile(path: string, now: Date): string {
   const backup = `${path}.bak-${timestamp(now)}`;
-  copyFileSync(path, backup);
+  const scrubbed = withoutInlineKeys(readFileSync(path, 'utf8'));
+  if (scrubbed === null) copyFileSync(path, backup);
+  else writeFileSync(backup, scrubbed, { encoding: 'utf8', mode: statSync(path).mode & 0o777 });
   return backup;
+}
+
+/** The config text without the inline key of any oswiki-sign entry (user scope and per-folder scope), or null when it holds none. */
+function withoutInlineKeys(text: string): string | null {
+  if (!text.includes('"OSWIKI_WALLET_KEY"')) return null;
+  let config: unknown;
+  try {
+    config = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) return null;
+  const projects = (config as Json).projects;
+  const scopes: unknown[] = [(config as Json).mcpServers];
+  if (projects !== null && typeof projects === 'object' && !Array.isArray(projects)) {
+    for (const project of Object.values(projects)) {
+      if (project !== null && typeof project === 'object') scopes.push((project as Json).mcpServers);
+    }
+  }
+  let found = false;
+  for (const servers of scopes) {
+    if (!hasServer(servers)) continue;
+    const entry = (servers as Json)[SERVER_NAME];
+    const env = entry !== null && typeof entry === 'object' ? (entry as Json).env : null;
+    if (env !== null && typeof env === 'object' && !Array.isArray(env) && Object.hasOwn(env, 'OSWIKI_WALLET_KEY')) {
+      delete (env as Json).OSWIKI_WALLET_KEY;
+      found = true;
+    }
+  }
+  return found ? `${JSON.stringify(config, null, 2)}\n` : null;
+}
+
+/** Backups written up to 0.2.6 are verbatim copies of the config. Returns the ones a private key was removed from. */
+export function scrubKeyBackups(deps: Pick<SetupDeps, 'home' | 'platform' | 'env'>): string[] {
+  const cleaned: string[] = [];
+  for (const config of [join(deps.home, '.claude.json'), cursorConfigPath(deps.home), claudeDesktopConfigPath(deps.platform, deps.home, deps.env)]) {
+    const dir = dirname(config);
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.startsWith(`${basename(config)}.bak-`)) continue;
+      const path = join(dir, name);
+      try {
+        const scrubbed = withoutInlineKeys(readFileSync(path, 'utf8'));
+        if (scrubbed === null) continue;
+        const tmp = `${path}.tmp-${process.pid}`;
+        writeFileSync(tmp, scrubbed, { encoding: 'utf8', mode: statSync(path).mode & 0o777 });
+        renameSync(tmp, path);
+        cleaned.push(path);
+      } catch {
+        // A backup that cannot be read or rewritten is left as it is.
+      }
+    }
+  }
+  return cleaned;
+}
+
+function reportScrubbedBackups(deps: SetupDeps): void {
+  const cleaned = scrubKeyBackups(deps);
+  if (cleaned.length > 0) deps.io.print(`Removed the private key from ${cleaned.length} old config backup${cleaned.length === 1 ? '' : 's'}: ${cleaned.join(', ')}`);
 }
 
 function writeJson(path: string, value: Json): void {
@@ -861,7 +928,7 @@ export function isClaudeCode(clientName: string | undefined): boolean {
 const INLINE_KEY_HELP = [
   'Move it to a key file: in step 1 choose "Import key" and paste the key at the hidden prompt (it is saved to ~/.oswiki-sign/key, readable only by you),',
   'or write it to a file yourself (README, Manual setup) and set OSWIKI_WALLET_KEY_FILE to its path.',
-  'Setup then writes an entry that holds only the key file path. Afterwards delete OSWIKI_WALLET_KEY from any config left over and the *.bak-* backups of these files, which still hold the key.',
+  'Setup then writes an entry that holds only the key file path and takes the key out of its *.bak-* backups of these files. Afterwards delete OSWIKI_WALLET_KEY from any config left over.',
 ].join(' ');
 
 /** Configs may still hold the key inline; only file names are reported, never the value. */
@@ -931,6 +998,7 @@ async function flow(deps: SetupDeps, options: { hardening: boolean }): Promise<v
   if (client === 'claude-code') hardenClaudeCode(deps, options.hardening);
   else for (const line of hardeningAdvice(client, dirname(keyFile))) io.print(line);
   if (configured) await selfTestStep(deps, entry, keyFile, wallet.address);
+  reportScrubbedBackups(deps);
 
   const clientName = { 'claude-code': 'Claude Code', cursor: 'Cursor', 'claude-desktop': 'Claude Desktop', print: 'your AI client' }[client];
   const collections = limits.collections;
@@ -1143,6 +1211,7 @@ export async function runUpdate(argv: string[], deps: SetupDeps): Promise<number
     return 1;
   }
   io.print(`oswiki-sign ${deps.version} update`);
+  reportScrubbedBackups(deps);
   const results = [
     updateClaudeCode(deps),
     updateJsonClient(deps, 'Cursor', cursorConfigPath(deps.home)),

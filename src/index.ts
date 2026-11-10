@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { homedir } from 'node:os';
+
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 import { ApiClient } from './api.js';
@@ -8,7 +10,7 @@ import { walletStatus } from './flows/status.js';
 import { loadWallet } from './secret.js';
 import { createSignServer, createToolHandler } from './server.js';
 import { SettingsStore } from './settings.js';
-import { defaultSetupDeps, runSetup, runUpdate } from './setup.js';
+import { defaultSetupDeps, runSetup, runUpdate, scrubKeyBackups } from './setup.js';
 import { TradeState } from './state.js';
 import { checkForUpdate, updateNotice } from './update-check.js';
 import { VERSION } from './version.js';
@@ -69,6 +71,8 @@ async function main(): Promise<void> {
   }
 
   for (const warning of wallet.warnings) process.stderr.write(`${warning}\n`);
+  const scrubbed = scrubKeyBackups({ home: homedir(), platform: process.platform, env: process.env });
+  if (scrubbed.length > 0) process.stderr.write(`oswiki-sign: removed the private key from ${scrubbed.length} old config backup${scrubbed.length === 1 ? '' : 's'}.\n`);
   if (settings.warning) process.stderr.write(`${settings.warning}\n`);
   if (config.confirmMode === 'off') process.stderr.write('WARNING: OSWIKI_CONFIRM_MODE=off - oswiki-sign shows no confirmation dialog; trades run on the AI\'s word, and a manipulated text could trigger a trade within your limits.\n');
   if (config.confirmMode === 'ai') process.stderr.write('WARNING: OSWIKI_CONFIRM_MODE=ai - without a client confirmation dialog and with OSWIKI_BROWSER_APPROVAL=0, execute runs on the AI\'s word alone.\n');
